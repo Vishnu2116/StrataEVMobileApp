@@ -1,6 +1,8 @@
 import React from "react";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 
+import LoginScreen from "../screens/LoginScreen";
+
 export type AuthStackParamList = {
   Login: undefined;
   OTP: { phone: string };
@@ -9,21 +11,14 @@ export type AuthStackParamList = {
 
 const Stack = createNativeStackNavigator<AuthStackParamList>();
 
-// Temporary placeholder screens until Step 3.2
-function TempScreen({ route }: any) {
-  return (
-    <>
-      {route.name === "Login" && <></>}
-      {route.name === "OTP" && <></>}
-      {route.name === "Name" && <></>}
-    </>
-  );
+function TempScreen() {
+  return null;
 }
 
 export default function AuthNavigator() {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="Login" component={TempScreen} />
+      <Stack.Screen name="Login" component={LoginScreen} />
       <Stack.Screen name="OTP" component={TempScreen} />
       <Stack.Screen name="Name" component={TempScreen} />
     </Stack.Navigator>
