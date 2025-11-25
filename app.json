@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "StrateEV",
-    "slug": "StrateEV",
+    "name": "StrataEv",
+    "slug": "StrataEv",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -25,6 +25,19 @@
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "plugins": []
+
+    "plugins": [],
+
+    "extra": {
+      "firebase": {
+        "apiKey": "AIzaSyD2shCob5jfqTOQunXE2R-9XwwMmiI3kBY",
+        "authDomain": "strataev-e9278.firebaseapp.com",
+        "projectId": "strataev-e9278",
+        "storageBucket": "strataev-e9278.firebasestorage.app",
+        "messagingSenderId": "770978661002",
+        "appId": "1:770978661002:web:43092d5c05b031942fe373",
+        "measurementId": "G-X2SWE56STN"
+      }
+    }
   }
 }

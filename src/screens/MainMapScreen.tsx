@@ -1,14 +1,16 @@
-import React from "react";
+import React, { useEffect } from "react";
 import { View, Text } from "react-native";
-import { BottomTabScreenProps } from "@react-navigation/bottom-tabs";
-import { TabParamList } from "../navigation/TabNavigator";
+import { auth, db } from "../api/firebase";
 
-type Props = BottomTabScreenProps<TabParamList, "Map">;
+export default function MainMapScreen() {
+  useEffect(() => {
+    console.log("🔥 Firebase Auth Loaded:", auth);
+    console.log("🔥 Firestore Loaded:", db);
+  }, []);
 
-export default function MainMapScreen({ navigation }: Props) {
   return (
     <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-      <Text>Map Screen</Text>
+      <Text>Firebase Test Screen</Text>
     </View>
   );
 }
