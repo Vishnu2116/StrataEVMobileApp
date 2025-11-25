@@ -3,6 +3,7 @@ import { createNativeStackNavigator } from "@react-navigation/native-stack";
 
 import LoginScreen from "../screens/LoginScreen";
 import OTPScreen from "../screens/OTPScreen";
+import NameScreen from "../screens/NameScreen";
 // NameScreen will be added in Step 3.4
 // For now we keep TempScreen until we build it
 
@@ -23,7 +24,7 @@ export default function AuthNavigator() {
     <Stack.Navigator screenOptions={{ headerShown: false }}>
       <Stack.Screen name="Login" component={LoginScreen} />
       <Stack.Screen name="OTP" component={OTPScreen} />
-      <Stack.Screen name="Name" component={TempScreen} />
+      <Stack.Screen name="Name" component={NameScreen} />
     </Stack.Navigator>
   );
 }
