@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { View, Text, ActivityIndicator, StyleSheet } from "react-native";
 import * as Location from "expo-location";
+import MapView, { PROVIDER_GOOGLE } from "react-native-maps";
 
 export default function MainMapScreen() {
   const [location, setLocation] = useState<any>(null);
@@ -22,7 +23,7 @@ export default function MainMapScreen() {
 
       // 2️⃣ Get current coordinates
       const loc = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Highest,
+        accuracy: Location.Accuracy.Balanced,
       });
 
       console.log("📍 User Location:", loc.coords);
@@ -36,7 +37,7 @@ export default function MainMapScreen() {
     return (
       <View style={styles.center}>
         <ActivityIndicator size="large" color="#0A8754" />
-        <Text style={{ marginTop: 10 }}>Getting your location...</Text>
+        <Text style={{ marginTop: 10 }}>Loading map...</Text>
       </View>
     );
   }
@@ -50,10 +51,19 @@ export default function MainMapScreen() {
   }
 
   return (
-    <View style={styles.center}>
-      <Text style={styles.success}>Location Retrieved!</Text>
-      <Text style={styles.coords}>Lat: {location.latitude.toFixed(6)}</Text>
-      <Text style={styles.coords}>Lng: {location.longitude.toFixed(6)}</Text>
+    <View style={{ flex: 1 }}>
+      <MapView
+        style={{ flex: 1 }}
+        provider={PROVIDER_GOOGLE} // Google Maps on Android, iOS requires API key later
+        showsUserLocation={true}
+        showsMyLocationButton={true}
+        initialRegion={{
+          latitude: location.latitude,
+          longitude: location.longitude,
+          latitudeDelta: 0.01,
+          longitudeDelta: 0.01,
+        }}
+      />
     </View>
   );
 }
@@ -68,15 +78,5 @@ const styles = StyleSheet.create({
   error: {
     color: "red",
     fontSize: 18,
-  },
-  success: {
-    fontSize: 22,
-    fontWeight: "600",
-    marginBottom: 10,
-  },
-  coords: {
-    fontSize: 16,
-    color: "#555",
-    marginTop: 4,
   },
 });

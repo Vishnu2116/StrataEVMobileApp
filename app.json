@@ -17,7 +17,7 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.strataev.app",
       "config": {
-        "googleMapsApiKey": "YOUR_IOS_API_KEY"
+        "googleMapsApiKey": "AIzaSyCeV7lKIRrJtoCj4euu5bk-OTAZyUgmGo8"
       },
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "StrataEV requires your location to find nearby EV charging stations and show accurate routing."
@@ -32,7 +32,7 @@
       "permissions": ["ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION"],
       "config": {
         "googleMaps": {
-          "apiKey": "YOUR_ANDROID_API_KEY"
+          "apiKey": "AIzaSyCeV7lKIRrJtoCj4euu5bk-OTAZyUgmGo8"
         }
       },
       "package": "com.strataev.app",
@@ -54,7 +54,8 @@
         "messagingSenderId": "770978661002",
         "appId": "1:770978661002:web:43092d5c05b031942fe373",
         "measurementId": "G-X2SWE56STN"
-      }
+      },
+      "mapsApiKey": "AIzaSyCeV7lKIRrJtoCj4euu5bk-OTAZyUgmGo8"
     }
   }
 }
