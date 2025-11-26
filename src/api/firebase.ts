@@ -1,5 +1,5 @@
 import Constants from "expo-constants";
-import { initializeApp } from "firebase/app";
+import { FirebaseOptions, initializeApp } from "firebase/app";
 import {
   getAuth,
   initializeAuth,
@@ -8,13 +8,13 @@ import {
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getFirestore } from "firebase/firestore";
 
-// Get Firebase config from app.json → extra.firebase
-const firebaseConfig = Constants.expoConfig?.extra?.firebase;
+// 1️⃣ Get Firebase config from app.json → extra.firebase
+const firebaseConfig = Constants.expoConfig?.extra?.firebase as FirebaseOptions;
 
-// Initialize Firebase App
+// 2️⃣ Initialize Firebase App
 const app = initializeApp(firebaseConfig);
 
-// Initialize Firebase Auth with persistent storage
+// 3️⃣ Initialize Firebase Auth with persistent storage
 let auth;
 
 try {
@@ -26,7 +26,8 @@ try {
   auth = getAuth(app);
 }
 
-// Initialize Firestore
+// 4️⃣ Initialize Firestore
 const db = getFirestore(app);
 
-export { app, auth, db };
+// 5️⃣ Export everything we’ll need elsewhere
+export { app, auth, db, firebaseConfig };

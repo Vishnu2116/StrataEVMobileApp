@@ -8,17 +8,32 @@ import {
 } from "react-native";
 
 export default function OTPScreen({ route, navigation }: any) {
-  const { phone } = route.params;
+  const { phone, confirmation } = route.params;
   const [code, setCode] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  const handleVerify = () => {
+  const handleVerify = async () => {
     if (code.length < 6) {
       alert("Enter a valid 6-digit OTP");
       return;
     }
 
-    // In this step we only navigate, no Firebase yet
-    navigation.navigate("Name", { uid: "TEMP_UID" });
+    try {
+      setLoading(true);
+
+      // 🔥 This confirms OTP with Firebase
+      const result = await confirmation.confirm(code);
+
+      const uid = result.user.uid;
+
+      // 🔥 Now go to NameScreen to collect user name
+      navigation.navigate("Name", { uid });
+    } catch (err: any) {
+      console.log("OTP Verification Error:", err);
+      alert(err?.message || "Invalid OTP. Try again.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -37,8 +52,14 @@ export default function OTPScreen({ route, navigation }: any) {
         maxLength={6}
       />
 
-      <TouchableOpacity style={styles.button} onPress={handleVerify}>
-        <Text style={styles.buttonText}>Continue</Text>
+      <TouchableOpacity
+        style={[styles.button, loading ? { opacity: 0.5 } : {}]}
+        onPress={handleVerify}
+        disabled={loading}
+      >
+        <Text style={styles.buttonText}>
+          {loading ? "Verifying..." : "Continue"}
+        </Text>
       </TouchableOpacity>
     </View>
   );

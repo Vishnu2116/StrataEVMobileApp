@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 import {
   View,
   Text,
@@ -7,28 +7,54 @@ import {
   StyleSheet,
 } from "react-native";
 
+import { FirebaseRecaptchaVerifierModal } from "expo-firebase-recaptcha";
+import { auth, firebaseConfig } from "../api/firebase";
+import { signInWithPhoneNumber } from "firebase/auth";
+
 export default function LoginScreen({ navigation }: any) {
   const [phone, setPhone] = useState("");
 
-  const handleContinue = () => {
+  // Recaptcha reference
+  const recaptchaVerifier = useRef(null);
+
+  const handleContinue = async () => {
     if (phone.length < 10) {
       alert("Enter a valid 10-digit mobile number");
       return;
     }
 
     const fullPhone = "+91" + phone;
-    navigation.navigate("OTP", { phone: fullPhone });
+
+    try {
+      const confirmation = await signInWithPhoneNumber(
+        auth,
+        fullPhone,
+        recaptchaVerifier.current
+      );
+
+      navigation.navigate("OTP", { phone: fullPhone, confirmation });
+    } catch (error: any) {
+      console.log("OTP Error:", error);
+      alert(error?.message || "Failed to send OTP. Try again.");
+    }
   };
 
   return (
     <View style={styles.container}>
+      {/* 🔐 Recaptcha Modal (invisible) */}
+      <FirebaseRecaptchaVerifierModal
+        ref={recaptchaVerifier}
+        firebaseConfig={firebaseConfig}
+        attemptInvisibleVerification={true}
+      />
+
       <Text style={styles.title}>Welcome to Strata EV</Text>
       <Text style={styles.subtitle}>Enter your mobile number to continue</Text>
 
       {/* Phone Input with +91 Prefix */}
       <View style={styles.phoneContainer}>
         <Text style={styles.countryCode}>+91</Text>
-        <View style={styles.divider} />
+        <View className="divider" style={styles.divider} />
         <TextInput
           style={styles.inputFlex}
           keyboardType="phone-pad"
@@ -65,8 +91,6 @@ const styles = StyleSheet.create({
     color: "#555",
     marginBottom: 24,
   },
-
-  // Phone Row Container
   phoneContainer: {
     flexDirection: "row",
     alignItems: "center",
@@ -77,27 +101,23 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     marginBottom: 20,
   },
-
   countryCode: {
     fontSize: 18,
     fontWeight: "600",
     color: "#000",
     marginRight: 8,
   },
-
   divider: {
     width: 1,
     height: 30,
     backgroundColor: "#ccc",
     marginRight: 8,
   },
-
   inputFlex: {
     flex: 1,
     fontSize: 18,
     color: "#000",
   },
-
   button: {
     backgroundColor: "#0A8754",
     paddingVertical: 15,
