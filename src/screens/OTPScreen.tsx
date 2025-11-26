@@ -7,7 +7,7 @@ import {
   StyleSheet,
 } from "react-native";
 
-export default function OTPScreen({ route, navigation }: any) {
+export default function OTPScreen({ route }: any) {
   const { phone, confirmation } = route.params;
   const [code, setCode] = useState("");
   const [loading, setLoading] = useState(false);
@@ -22,12 +22,12 @@ export default function OTPScreen({ route, navigation }: any) {
       setLoading(true);
 
       // 🔥 This confirms OTP with Firebase
-      const result = await confirmation.confirm(code);
+      await confirmation.confirm(code);
 
-      const uid = result.user.uid;
-
-      // 🔥 Now go to NameScreen to collect user name
-      navigation.navigate("Name", { uid });
+      // ⬆️ After this, Firebase logs the user in,
+      // AppNavigator will re-render and show either:
+      // - NameScreen (if no Firestore profile)
+      // - TabNavigator (if profile exists)
     } catch (err: any) {
       console.log("OTP Verification Error:", err);
       alert(err?.message || "Invalid OTP. Try again.");

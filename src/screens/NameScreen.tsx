@@ -6,23 +6,54 @@ import {
   TouchableOpacity,
   StyleSheet,
 } from "react-native";
+import { doc, setDoc, serverTimestamp } from "firebase/firestore";
+import { db } from "../api/firebase";
 
-export default function NameScreen({ route, navigation }: any) {
-  const { uid } = route.params; // temp from Step 3.3
+interface NameScreenProps {
+  uid: string;
+  phone?: string;
+  onCompleted: () => void;
+}
+
+export default function NameScreen({
+  uid,
+  phone,
+  onCompleted,
+}: NameScreenProps) {
   const [name, setName] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (name.trim().length < 2) {
       alert("Enter a valid name");
       return;
     }
 
-    // For now → simply navigate to Home (TabNavigator)
-    // Firebase write happens in Step 3.6
-    navigation.reset({
-      index: 0,
-      routes: [{ name: "Map" }], // load TabNavigator's Map screen
-    });
+    try {
+      setLoading(true);
+
+      const userRef = doc(db, "users", uid);
+
+      await setDoc(
+        userRef,
+        {
+          name: name.trim(),
+          phone: phone || null,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+          // we can later add savedLocations, etc.
+        },
+        { merge: true }
+      );
+
+      // 🔥 Tell AppNavigator that onboarding is done
+      onCompleted();
+    } catch (err: any) {
+      console.log("Error saving user profile:", err);
+      alert(err?.message || "Failed to save profile. Try again.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -41,8 +72,14 @@ export default function NameScreen({ route, navigation }: any) {
         onChangeText={setName}
       />
 
-      <TouchableOpacity style={styles.button} onPress={handleSave}>
-        <Text style={styles.buttonText}>Continue</Text>
+      <TouchableOpacity
+        style={[styles.button, loading ? { opacity: 0.5 } : {}]}
+        onPress={handleSave}
+        disabled={loading}
+      >
+        <Text style={styles.buttonText}>
+          {loading ? "Saving..." : "Continue"}
+        </Text>
       </TouchableOpacity>
     </View>
   );
