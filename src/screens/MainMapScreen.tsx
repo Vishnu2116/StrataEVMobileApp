@@ -7,13 +7,16 @@ import {
   StyleSheet,
   Image,
   TouchableOpacity,
+  FlatList,
   Linking,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Location from "expo-location";
-import MapView, { PROVIDER_GOOGLE, Marker } from "react-native-maps";
+import MapView, { PROVIDER_GOOGLE, Marker, Polyline } from "react-native-maps";
 
-import { fetchNearbyStations } from "../api/googlePlaces";
+import { fetchNearbyStations, fetchRoute } from "../api/googlePlaces";
+import { decodePolyline } from "../utils/polyline";
+
 import RouteInputCard from "../components/RouteInputCard";
 import SearchLocationModal from "../components/SearchLocationModal";
 
@@ -26,8 +29,6 @@ const SEARCH_RADIUS_METERS = 1500;
 const DEBOUNCE_MS = 800;
 const MIN_FETCH_INTERVAL_MS = 3000;
 
-// ------------------------------
-// Types
 // ------------------------------
 type Station = {
   id: string;
@@ -50,8 +51,6 @@ type SelectedLocation = {
 };
 
 // ------------------------------
-// Haversine
-// ------------------------------
 function haversineDistanceKm(lat1, lon1, lat2, lon2) {
   const R = 6371;
   const toRad = (v: number) => (v * Math.PI) / 180;
@@ -66,139 +65,143 @@ function haversineDistanceKm(lat1, lon1, lat2, lon2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-// ------------------------------
-// Build 3×3 grid
-// ------------------------------
-function getGridPointsFromRegion(region: any) {
-  const { latitude, longitude, latitudeDelta, longitudeDelta } = region;
+function haversineMeters(lat1, lon1, lat2, lon2) {
+  const R = 6371e3;
+  const toRad = (v) => (v * Math.PI) / 180;
 
-  const swLat = latitude - latitudeDelta / 2;
-  const neLat = latitude + latitudeDelta / 2;
-  const swLng = longitude - longitudeDelta / 2;
-  const neLng = longitude + longitudeDelta / 2;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
 
-  const points: { lat: number; lng: number }[] = [];
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
 
-  for (let row = 0; row < GRID_ROWS; row++) {
-    const lat = swLat + ((row + 0.5) / GRID_ROWS) * (neLat - swLat);
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
 
-    for (let col = 0; col < GRID_COLS; col++) {
-      const lng = swLng + ((col + 0.5) / GRID_COLS) * (neLng - swLng);
-      points.push({ lat, lng });
-    }
-  }
+function distancePointToSegment(p, a, b) {
+  const EPS = 1e-6;
 
-  return points;
+  const A = { lat: a.latitude, lng: a.longitude };
+  const B = { lat: b.latitude, lng: b.longitude };
+  const P = { lat: p.lat, lng: p.lng };
+
+  const ABx = B.lng - A.lng;
+  const ABy = B.lat - A.lat;
+
+  const APx = P.lng - A.lng;
+  const APy = P.lat - A.lat;
+
+  const mag = ABx * ABx + ABy * ABy;
+  let t = (APx * ABx + APy * ABy) / (mag + EPS);
+  t = Math.max(0, Math.min(1, t));
+
+  const proj = {
+    lat: A.lat + t * ABy,
+    lng: A.lng + t * ABx,
+  };
+
+  return haversineMeters(P.lat, P.lng, proj.lat, proj.lng);
 }
 
 // ------------------------------
-// MAIN
-// ------------------------------
 export default function MainMapScreen() {
   const insets = useSafeAreaInsets();
+  const mapRef = useRef<MapView>(null);
+
+  const [stationMode, setStationMode] = useState<
+    "normal" | "routing" | "route-only"
+  >("normal");
 
   const [location, setLocation] =
     useState<Location.LocationObjectCoords | null>(null);
 
-  const [initialRegion, setInitialRegion] = useState<any>(null);
+  const [initialRegion, setInitialRegion] = useState(null);
   const [stations, setStations] = useState<Station[]>([]);
   const [selectedStation, setSelectedStation] = useState<Station | null>(null);
 
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [routeCoords, setRouteCoords] = useState<any[]>([]);
+  const [routeDistance, setRouteDistance] = useState("");
+  const [routeDuration, setRouteDuration] = useState("");
 
+  const [stationsAlongRoute, setStationsAlongRoute] = useState<Station[]>([]);
+  const [showRouteStationsCard, setShowRouteStationsCard] = useState(false);
+
+  // ⭐ NEW — focused station card
+  const [focusedRouteStation, setFocusedRouteStation] =
+    useState<Station | null>(null);
+
+  const [loading, setLoading] = useState(true);
   const [startLabel, setStartLabel] = useState("Current Location");
   const [destinationLabel, setDestinationLabel] = useState("Enter destination");
 
-  // Store chosen locations (will be used later for Directions API)
   const [startLocation, setStartLocation] = useState<SelectedLocation | null>(
     null
   );
   const [destinationLocation, setDestinationLocation] =
     useState<SelectedLocation | null>(null);
 
-  // Search modal state
   const [searchModalVisible, setSearchModalVisible] = useState(false);
   const [searchMode, setSearchMode] = useState<"start" | "destination">(
     "start"
   );
 
-  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const debounceTimerRef = useRef<any>(null);
   const lastFetchTimeRef = useRef(0);
   const lastRegionRef = useRef<any>(null);
-  const originRef = useRef<{ latitude: number; longitude: number } | null>(
-    null
-  );
+  const originRef = useRef<any>(null);
 
   // ------------------------------
-  // Fetch stations for region
-  // ------------------------------
-  const loadStationsForRegion = useCallback(
-    async (
-      region: any,
-      originCoords: { latitude: number; longitude: number }
-    ) => {
-      try {
-        if (!region) return;
+  function getGridPointsFromRegion(region) {
+    const { latitude, longitude, latitudeDelta, longitudeDelta } = region;
 
-        const originLat = originCoords.latitude;
-        const originLng = originCoords.longitude;
+    const swLat = latitude - latitudeDelta / 2;
+    const neLat = latitude + latitudeDelta / 2;
+    const swLng = longitude - longitudeDelta / 2;
+    const neLng = longitude + longitudeDelta / 2;
 
-        const gridPoints = getGridPointsFromRegion(region);
-
-        console.log(
-          `⚡ Grid fetch: ${
-            gridPoints.length
-          } points, center=(${region.latitude.toFixed(
-            4
-          )}, ${region.longitude.toFixed(4)})`
-        );
-
-        const allResults = await Promise.all(
-          gridPoints.map((p) =>
-            fetchNearbyStations(p.lat, p.lng, SEARCH_RADIUS_METERS)
-          )
-        );
-
-        const merged = new Map<string, Station>();
-
-        allResults.forEach((list: any[]) => {
-          (list || []).forEach((st: any) => {
-            const newDist = haversineDistanceKm(
-              originLat,
-              originLng,
-              st.lat,
-              st.lng
-            );
-
-            const existing = merged.get(st.id);
-
-            if (!existing || newDist < existing.distanceKm) {
-              merged.set(st.id, { ...st, distanceKm: newDist });
-            }
-          });
-        });
-
-        const mergedStations = Array.from(merged.values()).sort(
-          (a, b) => a.distanceKm - b.distanceKm
-        );
-
-        console.log(
-          `⚡ Merged EV stations in viewport (unique): ${mergedStations.length}`
-        );
-
-        setStations(mergedStations);
-        lastRegionRef.current = region;
-        lastFetchTimeRef.current = Date.now();
-      } catch (err) {
-        console.log("❌ Grid error:", err);
+    const points = [];
+    for (let r = 0; r < GRID_ROWS; r++) {
+      const lat = swLat + ((r + 0.5) / GRID_ROWS) * (neLat - swLat);
+      for (let c = 0; c < GRID_COLS; c++) {
+        const lng = swLng + ((c + 0.5) / GRID_COLS) * (neLng - swLng);
+        points.push({ lat, lng });
       }
+    }
+    return points;
+  }
+
+  const loadStationsForRegion = useCallback(
+    async (region, originCoords) => {
+      if (stationMode !== "normal") return;
+
+      const originLat = originCoords.latitude;
+      const originLng = originCoords.longitude;
+      const gridPoints = getGridPointsFromRegion(region);
+
+      const allResults = await Promise.all(
+        gridPoints.map((p) =>
+          fetchNearbyStations(p.lat, p.lng, SEARCH_RADIUS_METERS)
+        )
+      );
+
+      const merged = new Map<string, Station>();
+
+      allResults.forEach((list) => {
+        list.forEach((st) => {
+          const d = haversineDistanceKm(originLat, originLng, st.lat, st.lng);
+          const existing = merged.get(st.id);
+          if (!existing || d < existing.distanceKm) {
+            merged.set(st.id, { ...st, distanceKm: d });
+          }
+        });
+      });
+
+      setStations(Array.from(merged.values()));
     },
-    []
+    [stationMode]
   );
 
-  // ------------------------------
-  // First load → location
   // ------------------------------
   useEffect(() => {
     (async () => {
@@ -206,17 +209,11 @@ export default function MainMapScreen() {
 
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== "granted") {
-        setErrorMsg("Location permission denied");
         setLoading(false);
         return;
       }
 
-      const loc = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Balanced,
-      });
-
-      console.log("📍 User Location:", loc.coords);
-
+      const loc = await Location.getCurrentPositionAsync({});
       setLocation(loc.coords);
 
       const region = {
@@ -225,7 +222,6 @@ export default function MainMapScreen() {
         latitudeDelta: 0.01,
         longitudeDelta: 0.01,
       };
-
       setInitialRegion(region);
 
       originRef.current = {
@@ -237,18 +233,24 @@ export default function MainMapScreen() {
 
       setLoading(false);
     })();
-
-    return () => {
-      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-    };
-  }, [loadStationsForRegion]);
+  }, []);
 
   // ------------------------------
-  // Region change
-  // ------------------------------
+  useEffect(() => {
+    if (location && !startLocation) {
+      setStartLocation({
+        name: "Current Location",
+        address: "",
+        lat: location.latitude,
+        lng: location.longitude,
+      });
+    }
+  }, [location]);
+
   const handleRegionChangeComplete = useCallback(
-    (region: any) => {
+    (region) => {
       if (!region) return;
+      if (stationMode !== "normal") return;
 
       lastRegionRef.current = region;
 
@@ -256,207 +258,353 @@ export default function MainMapScreen() {
 
       debounceTimerRef.current = setTimeout(() => {
         const now = Date.now();
-        const since = now - lastFetchTimeRef.current;
-
-        if (since < MIN_FETCH_INTERVAL_MS) {
-          console.log(`⏱ Throttled: ${since}ms`);
-          return;
-        }
+        if (now - lastFetchTimeRef.current < MIN_FETCH_INTERVAL_MS) return;
 
         const origin = originRef.current || {
           latitude: region.latitude,
           longitude: region.longitude,
         };
 
-        console.log("🗺 Map settled");
         loadStationsForRegion(region, origin);
+        lastFetchTimeRef.current = Date.now();
       }, DEBOUNCE_MS);
     },
-    [loadStationsForRegion]
+    [loadStationsForRegion, stationMode]
   );
 
   // ------------------------------
-  // Route card clicks
+  const handleFetchRoute = async () => {
+    if (!startLocation || !destinationLocation) return;
+
+    setStationMode("routing");
+
+    const result = await fetchRoute(
+      startLocation.lat,
+      startLocation.lng,
+      destinationLocation.lat,
+      destinationLocation.lng
+    );
+
+    if (!result || !result.polyline) {
+      alert("Route not found");
+      return;
+    }
+
+    const decoded = decodePolyline(result.polyline);
+
+    setRouteCoords(decoded);
+    setRouteDistance(result.distanceText);
+    setRouteDuration(result.durationText);
+
+    setTimeout(() => {
+      mapRef.current?.fitToCoordinates(decoded, {
+        edgePadding: { top: 80, bottom: 260, left: 60, right: 60 },
+        animated: true,
+      });
+    }, 300);
+  };
+
+  useEffect(() => {
+    if (startLocation && destinationLocation) {
+      handleFetchRoute();
+    }
+  }, [startLocation, destinationLocation]);
+
   // ------------------------------
+  const clearRoute = () => {
+    setStationMode("normal");
+    setRouteCoords([]);
+    setRouteDistance("");
+    setRouteDuration("");
+
+    // ⭐ reset destination completely
+    setDestinationLocation(null);
+    setDestinationLabel("Enter destination");
+
+    setStationsAlongRoute([]);
+    setFocusedRouteStation(null);
+    setShowRouteStationsCard(false);
+
+    if (initialRegion) {
+      mapRef.current?.animateToRegion(initialRegion, 500);
+    }
+  };
+
+  const findStationsAlongRoute = () => {
+    const MAX_DIST = 300;
+
+    const results = stations.filter((s) => {
+      for (let i = 0; i < routeCoords.length - 1; i++) {
+        const d = distancePointToSegment(s, routeCoords[i], routeCoords[i + 1]);
+        if (d <= MAX_DIST) return true;
+      }
+      return false;
+    });
+
+    setStationsAlongRoute(results);
+    setFocusedRouteStation(null);
+    setStationMode("route-only");
+    setShowRouteStationsCard(true);
+  };
+
+  const closeStationsOnRoute = () => {
+    setShowRouteStationsCard(false);
+    setStationMode("routing");
+  };
+
   const handlePressStart = () => {
-    console.log("🟢 Start pressed");
     setSearchMode("start");
     setSearchModalVisible(true);
   };
 
   const handlePressDestination = () => {
-    console.log("📍 Destination pressed");
     setSearchMode("destination");
     setSearchModalVisible(true);
   };
 
-  const handlePressAdd = () => {
-    console.log("➕ Add stop pressed");
-    // Will be used later for saved places
-  };
-
-  const handleNavigatePress = () => {
-    if (!selectedStation) return;
-
-    const url = `https://www.google.com/maps/dir/?api=1&destination=${selectedStation.lat},${selectedStation.lng}`;
-    Linking.openURL(url);
-  };
-
-  // Callback from SearchLocationModal
-  const handlePlaceSelected = (place: SelectedLocation) => {
+  const handlePlaceSelected = (place) => {
     if (searchMode === "start") {
-      console.log("✅ Selected start:", place);
       setStartLocation(place);
-      setStartLabel(place.name || "Start location");
+      setStartLabel(place.name);
     } else {
-      console.log("✅ Selected destination:", place);
       setDestinationLocation(place);
-      setDestinationLabel(place.name || "Destination");
+      setDestinationLabel(place.name);
     }
   };
 
   // ------------------------------
-  // Loading UI
-  // ------------------------------
   if (loading || !initialRegion) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator size="large" color="#0A8754" />
-        <Text style={{ marginTop: 10 }}>Loading map…</Text>
+        <ActivityIndicator size="large" />
+        <Text>Loading…</Text>
       </View>
     );
   }
 
-  // ------------------------------
-  // Error UI
-  // ------------------------------
-  if (errorMsg) {
-    return (
-      <View style={styles.center}>
-        <Text style={styles.error}>{errorMsg}</Text>
-      </View>
+  // ⭐ Zoom from list
+  const zoomToStation = (station: Station) => {
+    mapRef.current?.animateToRegion(
+      {
+        latitude: station.lat,
+        longitude: station.lng,
+        latitudeDelta: 0.005,
+        longitudeDelta: 0.005,
+      },
+      500
     );
-  }
+  };
 
-  // ------------------------------
-  // MAIN
   // ------------------------------
   return (
     <View style={{ flex: 1 }}>
       <MapView
+        ref={mapRef}
         style={{ flex: 1 }}
         provider={PROVIDER_GOOGLE}
         showsUserLocation
-        showsMyLocationButton
-        initialRegion={initialRegion}
         onRegionChangeComplete={handleRegionChangeComplete}
+        initialRegion={initialRegion}
       >
-        {stations.map((station) => (
+        {/* ⭐ START MARKER */}
+        {startLocation && (
           <Marker
-            key={station.id}
-            coordinate={{ latitude: station.lat, longitude: station.lng }}
-            onPress={() => {
-              console.log("📌 Marker pressed:", station.name);
-              setSelectedStation(station);
+            coordinate={{
+              latitude: startLocation.lat,
+              longitude: startLocation.lng,
             }}
-          >
-            <Image
-              source={require("../../assets/icons/ev.png")}
-              style={{ width: 44, height: 44 }}
-              resizeMode="contain"
-            />
-          </Marker>
-        ))}
+            pinColor="green"
+          />
+        )}
+
+        {/* ⭐ DESTINATION MARKER */}
+        {destinationLocation && (
+          <Marker
+            coordinate={{
+              latitude: destinationLocation.lat,
+              longitude: destinationLocation.lng,
+            }}
+            pinColor="blue"
+          />
+        )}
+
+        {/* normal mode markers */}
+        {stationMode === "normal" &&
+          stations.map((st) => (
+            <Marker
+              key={st.id}
+              coordinate={{ latitude: st.lat, longitude: st.lng }}
+              onPress={() => setSelectedStation(st)} // ⭐ FIXED
+            >
+              <Image
+                source={require("../../assets/icons/ev.png")}
+                style={{ width: 40, height: 40 }}
+              />
+            </Marker>
+          ))}
+
+        {/* route-only markers */}
+        {stationMode === "route-only" &&
+          stationsAlongRoute.map((st) => (
+            <Marker
+              key={st.id}
+              coordinate={{ latitude: st.lat, longitude: st.lng }}
+              onPress={() => setFocusedRouteStation(st)} // ⭐ show details
+            >
+              <Image
+                source={require("../../assets/icons/ev.png")}
+                style={{ width: 44, height: 44 }}
+              />
+            </Marker>
+          ))}
+
+        {/* route polyline */}
+        {routeCoords.length > 0 && (
+          <Polyline
+            coordinates={routeCoords}
+            strokeColor="#0A5CFF"
+            strokeWidth={6}
+          />
+        )}
       </MapView>
 
-      {/* TOP OVERLAY with safe area padding */}
-      <View
-        style={[styles.topOverlay, { paddingTop: insets.top + 6 }]}
-        pointerEvents="box-none"
-      >
-        <View style={styles.topRow}>
-          <View style={styles.routeCardWrapper}>
-            <RouteInputCard
-              startLabel={startLabel}
-              destinationLabel={destinationLabel}
-              onPressStart={handlePressStart}
-              onPressDestination={handlePressDestination}
-              onPressAdd={handlePressAdd}
-            />
-          </View>
-
-          <TouchableOpacity
-            style={styles.filterButton}
-            onPress={() => console.log("⚙️ Filters button pressed")}
-          >
-            <Text style={styles.filterIcon}>☷</Text>
-          </TouchableOpacity>
-        </View>
+      {/* TOP INPUT CARD */}
+      <View style={[styles.topOverlay, { paddingTop: insets.top + 6 }]}>
+        <RouteInputCard
+          startLabel={startLabel}
+          destinationLabel={destinationLabel}
+          onPressStart={handlePressStart}
+          onPressDestination={handlePressDestination}
+          onPressAdd={() => {}}
+        />
       </View>
 
-      {/* Station bottom sheet */}
-      {selectedStation && (
-        <View style={styles.bottomSheetWrapper}>
-          <View style={styles.bottomSheet}>
-            <TouchableOpacity
-              style={styles.closeBtn}
-              onPress={() => setSelectedStation(null)}
-            >
-              <Text style={styles.closeBtnText}>×</Text>
-            </TouchableOpacity>
+      {/* ROUTE PREVIEW CARD */}
+      {routeCoords.length > 0 && (
+        <View style={styles.routePreviewWrapper}>
+          <View style={styles.routePreviewCard}>
+            <Text style={styles.routeInfoText}>
+              {routeDistance} • {routeDuration}
+            </Text>
 
-            <Text style={styles.cardName}>{selectedStation.name}</Text>
-            <Text style={styles.cardAddress}>{selectedStation.address}</Text>
-
-            <View style={styles.rowBetween}>
-              <Text style={styles.cardRating}>
-                ⭐ {selectedStation.rating} ({selectedStation.userRatingsTotal})
-              </Text>
-              <Text style={styles.cardDistance}>
-                {selectedStation.distanceKm.toFixed(1)} km
-              </Text>
-            </View>
-
-            <View style={styles.badgeRow}>
-              <View style={styles.badgeOpen}>
-                <Text style={styles.badgeOpenText}>
-                  {selectedStation.businessStatus === "OPERATIONAL"
-                    ? "OPEN"
-                    : "CLOSED"}
-                </Text>
-              </View>
-
-              <View style={styles.badgeFast}>
-                <Text style={styles.badgeFastText}>
-                  {selectedStation.types?.includes(
-                    "electric_vehicle_fast_charging"
-                  )
-                    ? "FAST CHARGER"
-                    : "REGULAR"}
-                </Text>
-              </View>
-            </View>
-
-            <View style={styles.buttonRow}>
+            <View style={styles.routeButtonsRow}>
               <TouchableOpacity
-                style={styles.primaryBtn}
-                onPress={handleNavigatePress}
+                style={styles.routeBtnPrimary}
+                onPress={findStationsAlongRoute}
               >
-                <Text style={styles.primaryBtnText}>Navigate</Text>
+                <Text style={styles.routeBtnPrimaryText}>
+                  Stations On Route
+                </Text>
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={styles.secondaryBtn}
-                onPress={() => console.log("Details:", selectedStation.name)}
+                style={styles.routeBtnSecondary}
+                onPress={clearRoute}
               >
-                <Text style={styles.secondaryBtnText}>Details</Text>
+                <Text style={styles.routeBtnSecondaryText}>Clear</Text>
               </TouchableOpacity>
             </View>
           </View>
         </View>
       )}
 
-      {/* Search modal */}
+      {/* BOTTOM SHEET */}
+      {showRouteStationsCard && (
+        <View style={styles.fullSheet}>
+          <Text style={styles.sheetTitle}>Stations Along Route</Text>
+
+          <FlatList
+            data={stationsAlongRoute}
+            keyExtractor={(item) => item.id}
+            renderItem={({ item }) => (
+              <TouchableOpacity
+                onPress={() => {
+                  zoomToStation(item);
+                  setFocusedRouteStation(item);
+                }}
+              >
+                <View style={styles.stationItem}>
+                  <Text style={styles.itemTitle}>{item.name}</Text>
+                  <Text style={styles.itemAddress}>{item.address}</Text>
+                  <Text style={styles.itemRating}>
+                    ⭐ {item.rating} ({item.userRatingsTotal})
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            )}
+          />
+
+          <TouchableOpacity
+            style={styles.sheetCloseBtn}
+            onPress={closeStationsOnRoute}
+          >
+            <Text style={styles.sheetCloseText}>Close</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* ⭐ Focused station details card */}
+      {focusedRouteStation && stationMode === "route-only" && (
+        <View style={styles.stationDetailCard}>
+          <Text style={styles.detailTitle}>{focusedRouteStation.name}</Text>
+          <Text style={styles.detailAddress}>
+            {focusedRouteStation.address}
+          </Text>
+          <Text style={styles.detailRating}>
+            ⭐ {focusedRouteStation.rating} (
+            {focusedRouteStation.userRatingsTotal})
+          </Text>
+
+          <View style={{ flexDirection: "row", marginTop: 12 }}>
+            <TouchableOpacity
+              style={styles.navigateBtn}
+              onPress={() => {
+                const url = `https://www.google.com/maps/dir/?api=1&destination=${focusedRouteStation.lat},${focusedRouteStation.lng}`;
+                Linking.openURL(url);
+              }}
+            >
+              <Text style={styles.navigateText}>Navigate</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.closeDetailBtn}
+              onPress={() => setFocusedRouteStation(null)}
+            >
+              <Text style={styles.closeDetailText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+      {/* ⭐ NORMAL MODE — SELECTED STATION DETAILS */}
+      {selectedStation && stationMode === "normal" && (
+        <View style={styles.normalStationCard}>
+          <Text style={styles.detailTitle}>{selectedStation.name}</Text>
+          <Text style={styles.detailAddress}>{selectedStation.address}</Text>
+          <Text style={styles.detailRating}>
+            ⭐ {selectedStation.rating} ({selectedStation.userRatingsTotal})
+          </Text>
+
+          <View style={{ flexDirection: "row", marginTop: 12 }}>
+            <TouchableOpacity
+              style={styles.navigateBtn}
+              onPress={() => {
+                const url = `https://www.google.com/maps/dir/?api=1&destination=${selectedStation.lat},${selectedStation.lng}`;
+                Linking.openURL(url);
+              }}
+            >
+              <Text style={styles.navigateText}>Navigate</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.closeDetailBtn}
+              onPress={() => setSelectedStation(null)}
+            >
+              <Text style={styles.closeDetailText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
       <SearchLocationModal
         visible={searchModalVisible}
         mode={searchMode}
@@ -476,138 +624,157 @@ export default function MainMapScreen() {
 // STYLES
 // ------------------------------
 const styles = StyleSheet.create({
-  center: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  error: { color: "red", fontSize: 18 },
+  center: { flex: 1, justifyContent: "center", alignItems: "center" },
 
   topOverlay: {
     position: "absolute",
     top: 0,
-    left: 0,
-    right: 0,
+    width: "100%",
     paddingHorizontal: 12,
   },
 
-  topRow: { flexDirection: "row", alignItems: "flex-start" },
-
-  routeCardWrapper: { flex: 1, marginRight: 8 },
-
-  filterButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: "#FFFFFF",
+  routePreviewWrapper: {
+    position: "absolute",
+    bottom: 5,
+    left: 0,
+    right: 0,
+    paddingHorizontal: 16,
     alignItems: "center",
-    justifyContent: "center",
+    zIndex: 20,
+  },
+  routePreviewCard: {
+    width: "100%",
+    backgroundColor: "#fff",
+    padding: 16,
+    borderRadius: 14,
     shadowColor: "#000",
     shadowOpacity: 0.15,
     shadowRadius: 8,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 5,
+    elevation: 6,
   },
-  filterIcon: { fontSize: 20, color: "#222" },
-
-  bottomSheetWrapper: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    bottom: 0,
-    paddingHorizontal: 12,
-    paddingBottom: 12,
+  routeInfoText: {
+    fontSize: 16,
+    fontWeight: "700",
+    marginBottom: 12,
+  },
+  routeButtonsRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+  routeBtnPrimary: {
+    flex: 1,
+    backgroundColor: "#0A5CFF",
+    paddingVertical: 10,
+    borderRadius: 10,
+    marginRight: 8,
     alignItems: "center",
   },
+  routeBtnPrimaryText: { color: "#fff", fontWeight: "700" },
+  routeBtnSecondary: {
+    width: 80,
+    backgroundColor: "#eee",
+    paddingVertical: 10,
+    borderRadius: 10,
+    alignItems: "center",
+  },
+  routeBtnSecondaryText: { fontWeight: "700", color: "#333" },
 
-  bottomSheet: {
-    width: "100%",
-    maxWidth: 420,
+  fullSheet: {
+    position: "absolute",
+    bottom: 5,
+    left: 10,
+    right: 10,
+    height: "35%",
     backgroundColor: "#fff",
-    borderRadius: 18,
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
     padding: 16,
     shadowColor: "#000",
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: -2 },
-    elevation: 8,
+    shadowOpacity: 0.15,
+    shadowRadius: 10,
+    elevation: 10,
+    zIndex: 999,
   },
 
-  closeBtn: {
+  sheetTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    marginBottom: 12,
+    textAlign: "center",
+  },
+
+  stationItem: {
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: "#eee",
+  },
+  itemTitle: { fontSize: 15, fontWeight: "700" },
+  itemAddress: { fontSize: 12, color: "#666" },
+  itemRating: { fontSize: 12, color: "#444", marginTop: 4 },
+
+  sheetCloseBtn: {
+    marginTop: 10,
+    paddingVertical: 10,
+    backgroundColor: "#eee",
+    borderRadius: 10,
+    alignItems: "center",
+  },
+  sheetCloseText: {
+    fontWeight: "700",
+    color: "#333",
+  },
+
+  // ⭐ Focused station detail card
+  stationDetailCard: {
     position: "absolute",
-    right: 10,
-    top: 8,
-    width: 24,
-    height: 24,
-    backgroundColor: "#F0F0F0",
-    borderRadius: 12,
+    bottom: 145,
+    left: 12,
+    right: 12,
+    backgroundColor: "#fff",
+    padding: 16,
+    borderRadius: 14,
+    shadowColor: "#000",
+    shadowOpacity: 0.15,
+    shadowRadius: 10,
+    elevation: 8,
+    zIndex: 999,
+  },
+
+  detailTitle: { fontSize: 16, fontWeight: "700" },
+  detailAddress: { fontSize: 13, color: "#666", marginTop: 4 },
+  detailRating: { marginTop: 6, color: "#333" },
+
+  navigateBtn: {
+    flex: 1,
+    backgroundColor: "#0A5CFF",
+    paddingVertical: 10,
+    borderRadius: 10,
+    alignItems: "center",
+    marginRight: 8,
+  },
+  navigateText: { color: "#fff", fontWeight: "700" },
+
+  closeDetailBtn: {
+    width: 80,
+    backgroundColor: "#eee",
+    borderRadius: 10,
     alignItems: "center",
     justifyContent: "center",
   },
+  closeDetailText: { fontWeight: "700", color: "#333" },
 
-  closeBtnText: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: "#444",
-    marginTop: -1,
+  normalStationCard: {
+    position: "absolute",
+    bottom: 145,
+    left: 12,
+    right: 12,
+    backgroundColor: "#fff",
+    padding: 16,
+    borderRadius: 14,
+    shadowColor: "#000",
+    shadowOpacity: 0.15,
+    shadowRadius: 10,
+    elevation: 8,
+    zIndex: 999,
   },
-
-  cardName: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: "#222",
-    marginBottom: 4,
-    paddingRight: 28,
-  },
-  cardAddress: {
-    fontSize: 13,
-    color: "#666",
-    marginBottom: 10,
-    lineHeight: 18,
-  },
-
-  rowBetween: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginBottom: 10,
-  },
-
-  cardRating: { fontSize: 13, fontWeight: "600" },
-  cardDistance: { fontSize: 13, fontWeight: "700", color: "#0A8754" },
-
-  badgeRow: { flexDirection: "row", gap: 8, marginBottom: 12 },
-
-  badgeOpen: {
-    backgroundColor: "#E7F9ED",
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-  },
-  badgeOpenText: { color: "#0A8754", fontSize: 11, fontWeight: "700" },
-
-  badgeFast: {
-    backgroundColor: "#EAF4FF",
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-  },
-  badgeFastText: { color: "#0A5CFF", fontSize: 11, fontWeight: "700" },
-
-  buttonRow: { flexDirection: "row", justifyContent: "space-between" },
-
-  primaryBtn: {
-    backgroundColor: "#0A8754",
-    paddingVertical: 8,
-    paddingHorizontal: 20,
-    borderRadius: 10,
-  },
-  primaryBtnText: { color: "white", fontWeight: "700" },
-
-  secondaryBtn: {
-    backgroundColor: "#F1F1F1",
-    paddingVertical: 8,
-    paddingHorizontal: 20,
-    borderRadius: 10,
-  },
-  secondaryBtnText: { color: "#444", fontWeight: "700" },
 });
