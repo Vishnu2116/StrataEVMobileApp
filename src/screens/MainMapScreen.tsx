@@ -19,17 +19,18 @@ import { decodePolyline } from "../utils/polyline";
 
 import RouteInputCard from "../components/RouteInputCard";
 import SearchLocationModal from "../components/SearchLocationModal";
+import SavedPlacesModal from "../components/SavedPlacesModal";
 
-// ------------------------------
-// CONSTANTS
-// ------------------------------
+import { getSavedPlaces, savePlace, SavedPlace } from "../services/savedPlaces";
+
+// ------------------------------------
 const GRID_ROWS = 3;
 const GRID_COLS = 3;
 const SEARCH_RADIUS_METERS = 1500;
 const DEBOUNCE_MS = 800;
 const MIN_FETCH_INTERVAL_MS = 3000;
 
-// ------------------------------
+// ------------------------------------
 type Station = {
   id: string;
   name: string;
@@ -39,7 +40,6 @@ type Station = {
   rating: number;
   userRatingsTotal: number;
   businessStatus: string;
-  types?: string[];
   distanceKm: number;
 };
 
@@ -50,32 +50,15 @@ type SelectedLocation = {
   lng: number;
 };
 
-// ------------------------------
+// ------------------------------------
 function haversineDistanceKm(lat1, lon1, lat2, lon2) {
   const R = 6371;
   const toRad = (v: number) => (v * Math.PI) / 180;
-
   const dLat = toRad(lat2 - lat1);
   const dLon = toRad(lon2 - lon1);
-
   const a =
     Math.sin(dLat / 2) ** 2 +
     Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
-
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
-
-function haversineMeters(lat1, lon1, lat2, lon2) {
-  const R = 6371e3;
-  const toRad = (v) => (v * Math.PI) / 180;
-
-  const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lon2 - lon1);
-
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
-
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
@@ -88,7 +71,6 @@ function distancePointToSegment(p, a, b) {
 
   const ABx = B.lng - A.lng;
   const ABy = B.lat - A.lat;
-
   const APx = P.lng - A.lng;
   const APy = P.lat - A.lat;
 
@@ -101,36 +83,50 @@ function distancePointToSegment(p, a, b) {
     lng: A.lng + t * ABx,
   };
 
-  return haversineMeters(P.lat, P.lng, proj.lat, proj.lng);
+  const R = 6371e3;
+  const toRad = (v) => (v * Math.PI) / 180;
+
+  const dLat = toRad(P.lat - proj.lat);
+  const dLon = toRad(P.lng - proj.lng);
+
+  const a2 =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(P.lat)) *
+      Math.cos(toRad(proj.lat)) *
+      Math.sin(dLon / 2) ** 2;
+
+  return R * 2 * Math.atan2(Math.sqrt(a2), Math.sqrt(1 - a2));
 }
 
-// ------------------------------
+// ------------------------------------
 export default function MainMapScreen() {
   const insets = useSafeAreaInsets();
   const mapRef = useRef<MapView>(null);
 
+  // Modes
   const [stationMode, setStationMode] = useState<
     "normal" | "routing" | "route-only"
   >("normal");
 
+  // Location
   const [location, setLocation] =
     useState<Location.LocationObjectCoords | null>(null);
-
   const [initialRegion, setInitialRegion] = useState(null);
+
+  // EV stations
   const [stations, setStations] = useState<Station[]>([]);
   const [selectedStation, setSelectedStation] = useState<Station | null>(null);
 
+  // Routing
   const [routeCoords, setRouteCoords] = useState<any[]>([]);
   const [routeDistance, setRouteDistance] = useState("");
   const [routeDuration, setRouteDuration] = useState("");
-
   const [stationsAlongRoute, setStationsAlongRoute] = useState<Station[]>([]);
   const [showRouteStationsCard, setShowRouteStationsCard] = useState(false);
-
-  // ⭐ NEW — focused station card
   const [focusedRouteStation, setFocusedRouteStation] =
     useState<Station | null>(null);
 
+  // Labels / Selection
   const [loading, setLoading] = useState(true);
   const [startLabel, setStartLabel] = useState("Current Location");
   const [destinationLabel, setDestinationLabel] = useState("Enter destination");
@@ -141,20 +137,61 @@ export default function MainMapScreen() {
   const [destinationLocation, setDestinationLocation] =
     useState<SelectedLocation | null>(null);
 
+  // Search modal
   const [searchModalVisible, setSearchModalVisible] = useState(false);
   const [searchMode, setSearchMode] = useState<"start" | "destination">(
     "start"
   );
 
+  // Saved places modal
+  const [savedModalVisible, setSavedModalVisible] = useState(false);
+  const [savedPlaces, setSavedPlaces] = useState<SavedPlace[]>([]);
+  const [savedSelectionMode, setSavedSelectionMode] = useState<
+    "start" | "destination"
+  >("start");
+
+  // Fetch saved places
+  const loadSavedPlaces = async () => {
+    const list = await getSavedPlaces();
+    setSavedPlaces(list);
+  };
+
+  // Debounce & caching
   const debounceTimerRef = useRef<any>(null);
   const lastFetchTimeRef = useRef(0);
   const lastRegionRef = useRef<any>(null);
   const originRef = useRef<any>(null);
 
-  // ------------------------------
+  // ------------------------------------
+  // SAVE FUNCTION (NEW)
+  const handleSaveStation = async (place: any) => {
+    try {
+      const type = place.name.toLowerCase().includes("home")
+        ? "home"
+        : place.name.toLowerCase().includes("work")
+        ? "work"
+        : "custom";
+
+      await savePlace({
+        name: place.name,
+        address: place.address,
+        lat: place.lat,
+        lng: place.lng,
+        type,
+      });
+
+      alert("Saved!");
+      loadSavedPlaces();
+    } catch (err) {
+      console.log("Save error:", err);
+      alert("Failed to save");
+    }
+  };
+
+  // ------------------------------------
+  // GRID SEARCH LOGIC
   function getGridPointsFromRegion(region) {
     const { latitude, longitude, latitudeDelta, longitudeDelta } = region;
-
     const swLat = latitude - latitudeDelta / 2;
     const neLat = latitude + latitudeDelta / 2;
     const swLng = longitude - longitudeDelta / 2;
@@ -177,6 +214,7 @@ export default function MainMapScreen() {
 
       const originLat = originCoords.latitude;
       const originLng = originCoords.longitude;
+
       const gridPoints = getGridPointsFromRegion(region);
 
       const allResults = await Promise.all(
@@ -202,7 +240,8 @@ export default function MainMapScreen() {
     [stationMode]
   );
 
-  // ------------------------------
+  // ------------------------------------
+  // INITIAL LOCATION
   useEffect(() => {
     (async () => {
       setLoading(true);
@@ -222,8 +261,8 @@ export default function MainMapScreen() {
         latitudeDelta: 0.01,
         longitudeDelta: 0.01,
       };
-      setInitialRegion(region);
 
+      setInitialRegion(region);
       originRef.current = {
         latitude: loc.coords.latitude,
         longitude: loc.coords.longitude,
@@ -231,11 +270,11 @@ export default function MainMapScreen() {
 
       await loadStationsForRegion(region, originRef.current);
 
+      loadSavedPlaces();
       setLoading(false);
     })();
   }, []);
 
-  // ------------------------------
   useEffect(() => {
     if (location && !startLocation) {
       setStartLocation({
@@ -247,13 +286,13 @@ export default function MainMapScreen() {
     }
   }, [location]);
 
+  // ------------------------------------
+  // REGION CHANGE → GRID FETCH
   const handleRegionChangeComplete = useCallback(
     (region) => {
-      if (!region) return;
-      if (stationMode !== "normal") return;
+      if (!region || stationMode !== "normal") return;
 
       lastRegionRef.current = region;
-
       if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
 
       debounceTimerRef.current = setTimeout(() => {
@@ -272,7 +311,8 @@ export default function MainMapScreen() {
     [loadStationsForRegion, stationMode]
   );
 
-  // ------------------------------
+  // ------------------------------------
+  // ROUTING
   const handleFetchRoute = async () => {
     if (!startLocation || !destinationLocation) return;
 
@@ -285,7 +325,7 @@ export default function MainMapScreen() {
       destinationLocation.lng
     );
 
-    if (!result || !result.polyline) {
+    if (!result?.polyline) {
       alert("Route not found");
       return;
     }
@@ -310,14 +350,14 @@ export default function MainMapScreen() {
     }
   }, [startLocation, destinationLocation]);
 
-  // ------------------------------
+  // ------------------------------------
+  // CLEAR ROUTE
   const clearRoute = () => {
     setStationMode("normal");
     setRouteCoords([]);
     setRouteDistance("");
     setRouteDuration("");
 
-    // ⭐ reset destination completely
     setDestinationLocation(null);
     setDestinationLabel("Enter destination");
 
@@ -330,6 +370,8 @@ export default function MainMapScreen() {
     }
   };
 
+  // ------------------------------------
+  // FIND STATIONS ON ROUTE
   const findStationsAlongRoute = () => {
     const MAX_DIST = 300;
 
@@ -347,21 +389,8 @@ export default function MainMapScreen() {
     setShowRouteStationsCard(true);
   };
 
-  const closeStationsOnRoute = () => {
-    setShowRouteStationsCard(false);
-    setStationMode("routing");
-  };
-
-  const handlePressStart = () => {
-    setSearchMode("start");
-    setSearchModalVisible(true);
-  };
-
-  const handlePressDestination = () => {
-    setSearchMode("destination");
-    setSearchModalVisible(true);
-  };
-
+  // ------------------------------------
+  // UI HANDLERS
   const handlePlaceSelected = (place) => {
     if (searchMode === "start") {
       setStartLocation(place);
@@ -372,17 +401,6 @@ export default function MainMapScreen() {
     }
   };
 
-  // ------------------------------
-  if (loading || !initialRegion) {
-    return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" />
-        <Text>Loading…</Text>
-      </View>
-    );
-  }
-
-  // ⭐ Zoom from list
   const zoomToStation = (station: Station) => {
     mapRef.current?.animateToRegion(
       {
@@ -395,18 +413,30 @@ export default function MainMapScreen() {
     );
   };
 
-  // ------------------------------
+  // ------------------------------------
+  // LOADING SCREEN
+  if (loading || !initialRegion) {
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator size="large" />
+        <Text>Loading…</Text>
+      </View>
+    );
+  }
+
+  // ------------------------------------
   return (
     <View style={{ flex: 1 }}>
+      {/* MAP */}
       <MapView
         ref={mapRef}
         style={{ flex: 1 }}
         provider={PROVIDER_GOOGLE}
         showsUserLocation
-        onRegionChangeComplete={handleRegionChangeComplete}
         initialRegion={initialRegion}
+        onRegionChangeComplete={handleRegionChangeComplete}
       >
-        {/* ⭐ START MARKER */}
+        {/* Start marker */}
         {startLocation && (
           <Marker
             coordinate={{
@@ -417,7 +447,7 @@ export default function MainMapScreen() {
           />
         )}
 
-        {/* ⭐ DESTINATION MARKER */}
+        {/* Destination marker */}
         {destinationLocation && (
           <Marker
             coordinate={{
@@ -428,13 +458,13 @@ export default function MainMapScreen() {
           />
         )}
 
-        {/* normal mode markers */}
+        {/* Normal mode EV markers */}
         {stationMode === "normal" &&
           stations.map((st) => (
             <Marker
               key={st.id}
               coordinate={{ latitude: st.lat, longitude: st.lng }}
-              onPress={() => setSelectedStation(st)} // ⭐ FIXED
+              onPress={() => setSelectedStation(st)}
             >
               <Image
                 source={require("../../assets/icons/ev.png")}
@@ -443,13 +473,13 @@ export default function MainMapScreen() {
             </Marker>
           ))}
 
-        {/* route-only markers */}
+        {/* Route-only markers */}
         {stationMode === "route-only" &&
           stationsAlongRoute.map((st) => (
             <Marker
               key={st.id}
               coordinate={{ latitude: st.lat, longitude: st.lng }}
-              onPress={() => setFocusedRouteStation(st)} // ⭐ show details
+              onPress={() => setFocusedRouteStation(st)}
             >
               <Image
                 source={require("../../assets/icons/ev.png")}
@@ -458,7 +488,7 @@ export default function MainMapScreen() {
             </Marker>
           ))}
 
-        {/* route polyline */}
+        {/* Route line */}
         {routeCoords.length > 0 && (
           <Polyline
             coordinates={routeCoords}
@@ -468,18 +498,28 @@ export default function MainMapScreen() {
         )}
       </MapView>
 
-      {/* TOP INPUT CARD */}
+      {/* TOP SEARCH CARD */}
       <View style={[styles.topOverlay, { paddingTop: insets.top + 6 }]}>
         <RouteInputCard
           startLabel={startLabel}
           destinationLabel={destinationLabel}
-          onPressStart={handlePressStart}
-          onPressDestination={handlePressDestination}
-          onPressAdd={() => {}}
+          onPressStart={() => {
+            setSearchMode("start");
+            setSearchModalVisible(true);
+          }}
+          onPressDestination={() => {
+            setSearchMode("destination");
+            setSearchModalVisible(true);
+          }}
+          onPressSaved={() => {
+            setSavedSelectionMode(searchMode);
+            setSavedModalVisible(true);
+            loadSavedPlaces();
+          }}
         />
       </View>
 
-      {/* ROUTE PREVIEW CARD */}
+      {/* ROUTE PREVIEW */}
       {routeCoords.length > 0 && (
         <View style={styles.routePreviewWrapper}>
           <View style={styles.routePreviewCard}>
@@ -508,7 +548,7 @@ export default function MainMapScreen() {
         </View>
       )}
 
-      {/* BOTTOM SHEET */}
+      {/* STATIONS ALONG ROUTE SHEET */}
       {showRouteStationsCard && (
         <View style={styles.fullSheet}>
           <Text style={styles.sheetTitle}>Stations Along Route</Text>
@@ -536,14 +576,17 @@ export default function MainMapScreen() {
 
           <TouchableOpacity
             style={styles.sheetCloseBtn}
-            onPress={closeStationsOnRoute}
+            onPress={() => {
+              setShowRouteStationsCard(false);
+              setStationMode("routing");
+            }}
           >
             <Text style={styles.sheetCloseText}>Close</Text>
           </TouchableOpacity>
         </View>
       )}
 
-      {/* ⭐ Focused station details card */}
+      {/* FOCUSED ROUTE STATION DETAILS + SAVE */}
       {focusedRouteStation && stationMode === "route-only" && (
         <View style={styles.stationDetailCard}>
           <Text style={styles.detailTitle}>{focusedRouteStation.name}</Text>
@@ -567,6 +610,13 @@ export default function MainMapScreen() {
             </TouchableOpacity>
 
             <TouchableOpacity
+              style={styles.saveBtn}
+              onPress={() => handleSaveStation(focusedRouteStation)}
+            >
+              <Text style={styles.saveText}>Save</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
               style={styles.closeDetailBtn}
               onPress={() => setFocusedRouteStation(null)}
             >
@@ -575,7 +625,8 @@ export default function MainMapScreen() {
           </View>
         </View>
       )}
-      {/* ⭐ NORMAL MODE — SELECTED STATION DETAILS */}
+
+      {/* NORMAL MODE SELECTED STATION + SAVE */}
       {selectedStation && stationMode === "normal" && (
         <View style={styles.normalStationCard}>
           <Text style={styles.detailTitle}>{selectedStation.name}</Text>
@@ -596,6 +647,13 @@ export default function MainMapScreen() {
             </TouchableOpacity>
 
             <TouchableOpacity
+              style={styles.saveBtn}
+              onPress={() => handleSaveStation(selectedStation)}
+            >
+              <Text style={styles.saveText}>Save</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
               style={styles.closeDetailBtn}
               onPress={() => setSelectedStation(null)}
             >
@@ -605,6 +663,7 @@ export default function MainMapScreen() {
         </View>
       )}
 
+      {/* SEARCH MODAL */}
       <SearchLocationModal
         visible={searchModalVisible}
         mode={searchMode}
@@ -616,13 +675,30 @@ export default function MainMapScreen() {
         onClose={() => setSearchModalVisible(false)}
         onPlaceSelected={handlePlaceSelected}
       />
+
+      {/* SAVED PLACES MODAL */}
+      <SavedPlacesModal
+        visible={savedModalVisible}
+        places={savedPlaces}
+        onClose={() => setSavedModalVisible(false)}
+        onSelect={(place) => {
+          if (savedSelectionMode === "start") {
+            setStartLocation(place);
+            setStartLabel(place.name);
+          } else {
+            setDestinationLocation(place);
+            setDestinationLabel(place.name);
+          }
+          setSavedModalVisible(false);
+        }}
+      />
     </View>
   );
 }
 
-// ------------------------------
+// ------------------------------------
 // STYLES
-// ------------------------------
+// ------------------------------------
 const styles = StyleSheet.create({
   center: { flex: 1, justifyContent: "center", alignItems: "center" },
 
@@ -652,11 +728,7 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 6,
   },
-  routeInfoText: {
-    fontSize: 16,
-    fontWeight: "700",
-    marginBottom: 12,
-  },
+  routeInfoText: { fontSize: 16, fontWeight: "700", marginBottom: 12 },
   routeButtonsRow: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -695,14 +767,12 @@ const styles = StyleSheet.create({
     elevation: 10,
     zIndex: 999,
   },
-
   sheetTitle: {
     fontSize: 18,
     fontWeight: "700",
     marginBottom: 12,
     textAlign: "center",
   },
-
   stationItem: {
     paddingVertical: 10,
     borderBottomWidth: 1,
@@ -711,7 +781,6 @@ const styles = StyleSheet.create({
   itemTitle: { fontSize: 15, fontWeight: "700" },
   itemAddress: { fontSize: 12, color: "#666" },
   itemRating: { fontSize: 12, color: "#444", marginTop: 4 },
-
   sheetCloseBtn: {
     marginTop: 10,
     paddingVertical: 10,
@@ -724,7 +793,6 @@ const styles = StyleSheet.create({
     color: "#333",
   },
 
-  // ⭐ Focused station detail card
   stationDetailCard: {
     position: "absolute",
     bottom: 145,
@@ -753,6 +821,16 @@ const styles = StyleSheet.create({
     marginRight: 8,
   },
   navigateText: { color: "#fff", fontWeight: "700" },
+
+  saveBtn: {
+    width: 70,
+    backgroundColor: "#FFB300",
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 8,
+  },
+  saveText: { fontWeight: "700", color: "#222" },
 
   closeDetailBtn: {
     width: 80,

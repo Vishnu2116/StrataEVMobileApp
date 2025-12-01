@@ -1,3 +1,5 @@
+// src/api/savedPlaces.ts
+import { db, auth } from "../api/firebase";
 import {
   collection,
   doc,
@@ -6,7 +8,7 @@ import {
   getDocs,
   serverTimestamp,
 } from "firebase/firestore";
-import { db } from "../api/firebase";
+import { nanoid } from "nanoid/non-secure";
 
 export type SavedPlace = {
   id: string;
@@ -15,41 +17,43 @@ export type SavedPlace = {
   lat: number;
   lng: number;
   type: "home" | "work" | "custom";
+  createdAt?: any;
 };
 
-export async function addSavedPlace(
-  uid: string,
-  place: Omit<SavedPlace, "id">
-) {
-  const colRef = collection(db, "users", uid, "saved_places");
-  const newDoc = doc(colRef);
-
-  await setDoc(newDoc, {
-    ...place,
-    createdAt: serverTimestamp(),
-  });
-
-  return newDoc.id;
+// 🔐 Get reference to the correct Firestore path
+function getUserCollection() {
+  const uid = auth.currentUser?.uid;
+  if (!uid) throw new Error("User not logged in — cannot save places.");
+  return collection(db, "users", uid, "saved_places");
 }
 
-export async function getSavedPlaces(uid: string): Promise<SavedPlace[]> {
-  const colRef = collection(db, "users", uid, "saved_places");
-  const snap = await getDocs(colRef);
+// ⭐ Save place
+export async function savePlace(place: Omit<SavedPlace, "id">) {
+  const id = nanoid();
+  const data = { ...place, id, createdAt: serverTimestamp() };
 
-  return snap.docs.map((d) => {
-    const data = d.data();
-    return {
-      id: d.id,
-      name: data.name,
-      address: data.address,
-      lat: data.lat,
-      lng: data.lng,
-      type: data.type,
-    };
-  });
+  const col = getUserCollection();
+  const ref = doc(col, id);
+  await setDoc(ref, data);
+
+  return { id, ...place };
 }
 
-export async function deleteSavedPlace(uid: string, id: string) {
-  const ref = doc(db, "users", uid, "saved_places", id);
+// ⭐ Get all saved places
+export async function getSavedPlaces(): Promise<SavedPlace[]> {
+  const col = getUserCollection();
+  const snap = await getDocs(col);
+
+  const list: SavedPlace[] = [];
+  snap.forEach((doc) => list.push(doc.data() as SavedPlace));
+  return list.sort(
+    (a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0)
+  );
+}
+
+// ⭐ Remove place
+export async function removeSavedPlace(id: string) {
+  const col = getUserCollection();
+  const ref = doc(col, id);
   await deleteDoc(ref);
 }

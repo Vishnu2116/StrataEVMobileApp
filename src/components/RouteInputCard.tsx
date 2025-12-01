@@ -6,7 +6,7 @@ type RouteInputCardProps = {
   destinationLabel: string;
   onPressStart: () => void;
   onPressDestination: () => void;
-  onPressAdd: () => void;
+  onPressSaved: () => void;
 };
 
 const RouteInputCard: React.FC<RouteInputCardProps> = ({
@@ -14,14 +14,13 @@ const RouteInputCard: React.FC<RouteInputCardProps> = ({
   destinationLabel,
   onPressStart,
   onPressDestination,
-  onPressAdd,
+  onPressSaved,
 }) => {
   return (
     <View style={styles.container}>
-      {/* Handle / drag indicator style bar (purely visual) */}
       <View style={styles.handleBar} />
 
-      {/* Start input */}
+      {/* Start */}
       <TouchableOpacity style={styles.row} onPress={onPressStart}>
         <View style={styles.dotWrapper}>
           <View style={[styles.dot, styles.dotStart]} />
@@ -37,10 +36,9 @@ const RouteInputCard: React.FC<RouteInputCardProps> = ({
         </View>
       </TouchableOpacity>
 
-      {/* Divider */}
       <View style={styles.divider} />
 
-      {/* Destination input */}
+      {/* Destination */}
       <TouchableOpacity style={styles.row} onPress={onPressDestination}>
         <View style={styles.dotWrapper}>
           <View style={[styles.dot, styles.dotDest]} />
@@ -56,11 +54,11 @@ const RouteInputCard: React.FC<RouteInputCardProps> = ({
         </View>
       </TouchableOpacity>
 
-      {/* Add button row */}
+      {/* Saved Places */}
       <View style={styles.addRow}>
-        <TouchableOpacity style={styles.addBtn} onPress={onPressAdd}>
-          <Text style={styles.addIcon}>＋</Text>
-          <Text style={styles.addText}>Add stop / saved place</Text>
+        <TouchableOpacity style={styles.addBtn} onPress={onPressSaved}>
+          <Text style={styles.addIcon}>★</Text>
+          <Text style={styles.addText}>Saved Places</Text>
         </TouchableOpacity>
       </View>
     </View>
