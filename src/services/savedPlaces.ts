@@ -20,40 +20,85 @@ export type SavedPlace = {
   createdAt?: any;
 };
 
-// 🔐 Get reference to the correct Firestore path
+// ------------------------------------------------------------
+// 🛡 SAFE: Get Firestore path only if user is logged in
+// ------------------------------------------------------------
 function getUserCollection() {
   const uid = auth.currentUser?.uid;
-  if (!uid) throw new Error("User not logged in — cannot save places.");
+
+  // prevent app freeze / infinite loading
+  if (!uid) {
+    console.log("⚠️ No user logged in — skipping saved places ops");
+    return null;
+  }
+
   return collection(db, "users", uid, "saved_places");
 }
 
-// ⭐ Save place
+// ------------------------------------------------------------
+// ⭐ Save a place (SAFE)
+// ------------------------------------------------------------
 export async function savePlace(place: Omit<SavedPlace, "id">) {
-  const id = nanoid();
-  const data = { ...place, id, createdAt: serverTimestamp() };
-
   const col = getUserCollection();
-  const ref = doc(col, id);
-  await setDoc(ref, data);
+  if (!col) return null; // user not logged in
 
-  return { id, ...place };
+  const id = nanoid();
+  const data = {
+    ...place,
+    id,
+    createdAt: serverTimestamp(),
+  };
+
+  try {
+    const ref = doc(col, id);
+    await setDoc(ref, data);
+    return { id, ...place };
+  } catch (err) {
+    console.log("❌ Firestore savePlace error:", err);
+    return null;
+  }
 }
 
-// ⭐ Get all saved places
+// ------------------------------------------------------------
+// ⭐ Get all saved places (SAFE)
+// ------------------------------------------------------------
 export async function getSavedPlaces(): Promise<SavedPlace[]> {
   const col = getUserCollection();
-  const snap = await getDocs(col);
+  if (!col) return []; // no user → return empty list safely
 
-  const list: SavedPlace[] = [];
-  snap.forEach((doc) => list.push(doc.data() as SavedPlace));
-  return list.sort(
-    (a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0)
-  );
+  try {
+    const snap = await getDocs(col);
+    const list: SavedPlace[] = [];
+
+    snap.forEach((doc) => {
+      const data = doc.data();
+
+      // prevent app crash if data is malformed
+      if (!data || !data.id) return;
+
+      list.push(data as SavedPlace);
+    });
+
+    return list.sort(
+      (a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0)
+    );
+  } catch (err) {
+    console.log("❌ Firestore getSavedPlaces error:", err);
+    return [];
+  }
 }
 
-// ⭐ Remove place
+// ------------------------------------------------------------
+// ⭐ Remove saved place (SAFE)
+// ------------------------------------------------------------
 export async function removeSavedPlace(id: string) {
   const col = getUserCollection();
-  const ref = doc(col, id);
-  await deleteDoc(ref);
+  if (!col) return;
+
+  try {
+    const ref = doc(col, id);
+    await deleteDoc(ref);
+  } catch (err) {
+    console.log("❌ Firestore removeSavedPlace error:", err);
+  }
 }

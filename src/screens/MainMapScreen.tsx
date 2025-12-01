@@ -1,5 +1,11 @@
 // src/screens/MainMapScreen.tsx
-import React, { useEffect, useState, useRef, useCallback } from "react";
+import React, {
+  useEffect,
+  useState,
+  useRef,
+  useCallback,
+  useMemo,
+} from "react";
 import {
   View,
   Text,
@@ -21,7 +27,12 @@ import RouteInputCard from "../components/RouteInputCard";
 import SearchLocationModal from "../components/SearchLocationModal";
 import SavedPlacesModal from "../components/SavedPlacesModal";
 
-import { getSavedPlaces, savePlace, SavedPlace } from "../services/savedPlaces";
+import {
+  getSavedPlaces,
+  savePlace,
+  removeSavedPlace,
+  SavedPlace,
+} from "../services/savedPlaces";
 
 // ------------------------------------
 const GRID_ROWS = 3;
@@ -51,14 +62,18 @@ type SelectedLocation = {
 };
 
 // ------------------------------------
+// DISTANCE HELPERS
 function haversineDistanceKm(lat1, lon1, lat2, lon2) {
   const R = 6371;
   const toRad = (v: number) => (v * Math.PI) / 180;
+
   const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lon2 - lon1);
+  const dLon = toRad(lat2 - lon1);
+
   const a =
     Math.sin(dLat / 2) ** 2 +
     Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
@@ -99,6 +114,51 @@ function distancePointToSegment(p, a, b) {
 }
 
 // ------------------------------------
+// CACHING HELPERS
+// Cache based on viewport bounds (Option 1)
+function makeRegionKey(region: {
+  latitude: number;
+  longitude: number;
+  latitudeDelta: number;
+  longitudeDelta: number;
+}) {
+  const { latitude, longitude, latitudeDelta, longitudeDelta } = region;
+
+  const minLat = latitude - latitudeDelta / 2;
+  const maxLat = latitude + latitudeDelta / 2;
+  const minLng = longitude - longitudeDelta / 2;
+  const maxLng = longitude + longitudeDelta / 2;
+
+  // round for stability
+  return [
+    minLat.toFixed(3),
+    maxLat.toFixed(3),
+    minLng.toFixed(3),
+    maxLng.toFixed(3),
+  ].join("_");
+}
+
+// ------------------------------------
+// MEMOIZED POLYLINE (avoid iOS disappearing bug)
+const RoutePolyline = React.memo(function RoutePolyline({
+  coords,
+}: {
+  coords: { latitude: number; longitude: number }[];
+}) {
+  if (!coords || coords.length === 0) return null;
+
+  return (
+    <Polyline
+      coordinates={coords}
+      strokeColor="#0A5CFF"
+      strokeWidth={6}
+      // optionally: lineCap="round"
+      // optionally: lineJoin="round"
+    />
+  );
+});
+
+// ------------------------------------
 export default function MainMapScreen() {
   const insets = useSafeAreaInsets();
   const mapRef = useRef<MapView>(null);
@@ -111,14 +171,16 @@ export default function MainMapScreen() {
   // Location
   const [location, setLocation] =
     useState<Location.LocationObjectCoords | null>(null);
-  const [initialRegion, setInitialRegion] = useState(null);
+  const [initialRegion, setInitialRegion] = useState<any>(null);
 
   // EV stations
   const [stations, setStations] = useState<Station[]>([]);
   const [selectedStation, setSelectedStation] = useState<Station | null>(null);
 
   // Routing
-  const [routeCoords, setRouteCoords] = useState<any[]>([]);
+  const [routeCoords, setRouteCoords] = useState<
+    { latitude: number; longitude: number }[]
+  >([]);
   const [routeDistance, setRouteDistance] = useState("");
   const [routeDuration, setRouteDuration] = useState("");
   const [stationsAlongRoute, setStationsAlongRoute] = useState<Station[]>([]);
@@ -143,29 +205,63 @@ export default function MainMapScreen() {
     "start"
   );
 
-  // Saved places modal
+  // Saved places
   const [savedModalVisible, setSavedModalVisible] = useState(false);
   const [savedPlaces, setSavedPlaces] = useState<SavedPlace[]>([]);
   const [savedSelectionMode, setSavedSelectionMode] = useState<
     "start" | "destination"
   >("start");
 
-  // Fetch saved places
-  const loadSavedPlaces = async () => {
-    const list = await getSavedPlaces();
-    setSavedPlaces(list);
-  };
-
-  // Debounce & caching
+  // Debounce refs
   const debounceTimerRef = useRef<any>(null);
   const lastFetchTimeRef = useRef(0);
-  const lastRegionRef = useRef<any>(null);
   const originRef = useRef<any>(null);
 
+  // Skip fetch when we programmatically change region
+  const skipFetchRef = useRef<boolean>(false);
+
+  // In-memory cache of stations per region
+  const stationsCacheRef = useRef<Map<string, Station[]>>(
+    new Map<string, Station[]>()
+  );
+
   // ------------------------------------
-  // SAVE FUNCTION (NEW)
+  // SAFE LOAD SAVED PLACES
+  const loadSavedPlaces = async () => {
+    try {
+      const list = await getSavedPlaces();
+      setSavedPlaces(list || []);
+    } catch (e) {
+      console.log("⚠️ Skipping saved places load:", e);
+    }
+  };
+
+  // ------------------------------------
+  // DELETE SAVED PLACE
+  const handleDeleteSavedPlace = async (id: string) => {
+    try {
+      await removeSavedPlace(id);
+      await loadSavedPlaces();
+    } catch (e) {
+      console.log("Delete saved place error:", e);
+    }
+  };
+
+  // ------------------------------------
+  // SAVE STATION (with duplicate check)
   const handleSaveStation = async (place: any) => {
     try {
+      const exists = savedPlaces.some(
+        (p) =>
+          Math.abs(p.lat - place.lat) < 0.0001 &&
+          Math.abs(p.lng - place.lng) < 0.0001
+      );
+
+      if (exists) {
+        alert("Already saved");
+        return;
+      }
+
       const type = place.name.toLowerCase().includes("home")
         ? "home"
         : place.name.toLowerCase().includes("work")
@@ -183,15 +279,16 @@ export default function MainMapScreen() {
       alert("Saved!");
       loadSavedPlaces();
     } catch (err) {
-      console.log("Save error:", err);
+      console.log("❌ Save error:", err);
       alert("Failed to save");
     }
   };
 
   // ------------------------------------
-  // GRID SEARCH LOGIC
+  // GRID SEARCH
   function getGridPointsFromRegion(region) {
     const { latitude, longitude, latitudeDelta, longitudeDelta } = region;
+
     const swLat = latitude - latitudeDelta / 2;
     const neLat = latitude + latitudeDelta / 2;
     const swLng = longitude - longitudeDelta / 2;
@@ -212,16 +309,32 @@ export default function MainMapScreen() {
     async (region, originCoords) => {
       if (stationMode !== "normal") return;
 
+      const cacheKey = makeRegionKey(region);
+      const cache = stationsCacheRef.current;
+
+      // 1. Try cache first
+      if (cache.has(cacheKey)) {
+        // console.log("📦 Using cached stations for region", cacheKey);
+        setStations(cache.get(cacheKey) || []);
+        return;
+      }
+
       const originLat = originCoords.latitude;
       const originLng = originCoords.longitude;
 
       const gridPoints = getGridPointsFromRegion(region);
 
-      const allResults = await Promise.all(
-        gridPoints.map((p) =>
-          fetchNearbyStations(p.lat, p.lng, SEARCH_RADIUS_METERS)
-        )
-      );
+      let allResults;
+      try {
+        allResults = await Promise.all(
+          gridPoints.map((p) =>
+            fetchNearbyStations(p.lat, p.lng, SEARCH_RADIUS_METERS)
+          )
+        );
+      } catch (err) {
+        console.log("❌ Error fetching stations:", err);
+        return;
+      }
 
       const merged = new Map<string, Station>();
 
@@ -235,7 +348,13 @@ export default function MainMapScreen() {
         });
       });
 
-      setStations(Array.from(merged.values()));
+      const mergedList = Array.from(merged.values());
+
+      // 2. Store in cache
+      cache.set(cacheKey, mergedList);
+
+      // 3. Update state
+      setStations(mergedList);
     },
     [stationMode]
   );
@@ -244,37 +363,45 @@ export default function MainMapScreen() {
   // INITIAL LOCATION
   useEffect(() => {
     (async () => {
-      setLoading(true);
+      try {
+        setLoading(true);
 
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== "granted") {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== "granted") {
+          setLoading(false);
+          return;
+        }
+
+        const loc = await Location.getCurrentPositionAsync({});
+        setLocation(loc.coords);
+
+        const region = {
+          latitude: loc.coords.latitude,
+          longitude: loc.coords.longitude,
+          latitudeDelta: 0.01,
+          longitudeDelta: 0.01,
+        };
+
+        setInitialRegion(region);
+        originRef.current = {
+          latitude: loc.coords.latitude,
+          longitude: loc.coords.longitude,
+        };
+
+        await loadStationsForRegion(region, originRef.current);
+
+        await loadSavedPlaces();
+
         setLoading(false);
-        return;
+      } catch (err) {
+        console.log("Init error:", err);
+        setLoading(false);
       }
-
-      const loc = await Location.getCurrentPositionAsync({});
-      setLocation(loc.coords);
-
-      const region = {
-        latitude: loc.coords.latitude,
-        longitude: loc.coords.longitude,
-        latitudeDelta: 0.01,
-        longitudeDelta: 0.01,
-      };
-
-      setInitialRegion(region);
-      originRef.current = {
-        latitude: loc.coords.latitude,
-        longitude: loc.coords.longitude,
-      };
-
-      await loadStationsForRegion(region, originRef.current);
-
-      loadSavedPlaces();
-      setLoading(false);
     })();
-  }, []);
+  }, [loadStationsForRegion]);
 
+  // ------------------------------------
+  // SET START LOCATION TO CURRENT POSITION
   useEffect(() => {
     if (location && !startLocation) {
       setStartLocation({
@@ -284,15 +411,19 @@ export default function MainMapScreen() {
         lng: location.longitude,
       });
     }
-  }, [location]);
+  }, [location, startLocation]);
 
   // ------------------------------------
-  // REGION CHANGE → GRID FETCH
+  // REGION CHANGE
   const handleRegionChangeComplete = useCallback(
     (region) => {
+      if (skipFetchRef.current) {
+        // console.log("⏭ Skipping fetch due to programmatic zoom");
+        return;
+      }
+
       if (!region || stationMode !== "normal") return;
 
-      lastRegionRef.current = region;
       if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
 
       debounceTimerRef.current = setTimeout(() => {
@@ -312,7 +443,7 @@ export default function MainMapScreen() {
   );
 
   // ------------------------------------
-  // ROUTING
+  // ROUTE CALCULATION
   const handleFetchRoute = async () => {
     if (!startLocation || !destinationLocation) return;
 
@@ -331,7 +462,7 @@ export default function MainMapScreen() {
     }
 
     const decoded = decodePolyline(result.polyline);
-
+    // Ensure decoded is in { latitude, longitude } format
     setRouteCoords(decoded);
     setRouteDistance(result.distanceText);
     setRouteDuration(result.durationText);
@@ -371,7 +502,7 @@ export default function MainMapScreen() {
   };
 
   // ------------------------------------
-  // FIND STATIONS ON ROUTE
+  // FIND STATIONS ALONG ROUTE
   const findStationsAlongRoute = () => {
     const MAX_DIST = 300;
 
@@ -390,7 +521,6 @@ export default function MainMapScreen() {
   };
 
   // ------------------------------------
-  // UI HANDLERS
   const handlePlaceSelected = (place) => {
     if (searchMode === "start") {
       setStartLocation(place);
@@ -402,6 +532,8 @@ export default function MainMapScreen() {
   };
 
   const zoomToStation = (station: Station) => {
+    skipFetchRef.current = true;
+
     mapRef.current?.animateToRegion(
       {
         latitude: station.lat,
@@ -411,10 +543,42 @@ export default function MainMapScreen() {
       },
       500
     );
+
+    setTimeout(() => {
+      skipFetchRef.current = false;
+    }, 800);
+  };
+
+  // Special zoom for "Stations On Route" → keep full route visible
+  const zoomToStationOnRoute = (station: Station) => {
+    if (!routeCoords || routeCoords.length === 0) {
+      zoomToStation(station);
+      return;
+    }
+
+    const allCoords = [
+      ...routeCoords,
+      { latitude: station.lat, longitude: station.lng },
+    ];
+
+    skipFetchRef.current = true;
+
+    mapRef.current?.fitToCoordinates(allCoords, {
+      edgePadding: { top: 80, bottom: 260, left: 60, right: 60 },
+      animated: true,
+    });
+
+    setTimeout(() => {
+      skipFetchRef.current = false;
+    }, 800);
   };
 
   // ------------------------------------
-  // LOADING SCREEN
+  // MEMOIZED ROUTE COORDS FOR POLYLINE
+  const memoRouteCoords = useMemo(() => routeCoords, [routeCoords]);
+
+  // ------------------------------------
+  // LOADING UI
   if (loading || !initialRegion) {
     return (
       <View style={styles.center}>
@@ -458,22 +622,32 @@ export default function MainMapScreen() {
           />
         )}
 
-        {/* Normal mode EV markers */}
+        {/* Normal mode markers */}
         {stationMode === "normal" &&
-          stations.map((st) => (
-            <Marker
-              key={st.id}
-              coordinate={{ latitude: st.lat, longitude: st.lng }}
-              onPress={() => setSelectedStation(st)}
-            >
-              <Image
-                source={require("../../assets/icons/ev.png")}
-                style={{ width: 40, height: 40 }}
-              />
-            </Marker>
-          ))}
+          stations.map((st) => {
+            const isSelected = selectedStation?.id === st.id;
 
-        {/* Route-only markers */}
+            return (
+              <Marker
+                key={st.id}
+                coordinate={{ latitude: st.lat, longitude: st.lng }}
+                onPress={() => {
+                  setSelectedStation(st);
+                }}
+              >
+                <Image
+                  source={require("../../assets/icons/ev.png")}
+                  style={{
+                    width: isSelected ? 48 : 40,
+                    height: isSelected ? 48 : 40,
+                  }}
+                  resizeMode="contain"
+                />
+              </Marker>
+            );
+          })}
+
+        {/* Route-only markers (keep marker even when focused) */}
         {stationMode === "route-only" &&
           stationsAlongRoute.map((st) => (
             <Marker
@@ -484,21 +658,16 @@ export default function MainMapScreen() {
               <Image
                 source={require("../../assets/icons/ev.png")}
                 style={{ width: 44, height: 44 }}
+                resizeMode="contain"
               />
             </Marker>
           ))}
 
-        {/* Route line */}
-        {routeCoords.length > 0 && (
-          <Polyline
-            coordinates={routeCoords}
-            strokeColor="#0A5CFF"
-            strokeWidth={6}
-          />
-        )}
+        {/* Route polyline — stays as long as routeCoords not cleared */}
+        <RoutePolyline coords={memoRouteCoords} />
       </MapView>
 
-      {/* TOP SEARCH CARD */}
+      {/* SEARCH CARD */}
       <View style={[styles.topOverlay, { paddingTop: insets.top + 6 }]}>
         <RouteInputCard
           startLabel={startLabel}
@@ -548,7 +717,7 @@ export default function MainMapScreen() {
         </View>
       )}
 
-      {/* STATIONS ALONG ROUTE SHEET */}
+      {/* SHEET — STATIONS ALONG ROUTE */}
       {showRouteStationsCard && (
         <View style={styles.fullSheet}>
           <Text style={styles.sheetTitle}>Stations Along Route</Text>
@@ -559,7 +728,7 @@ export default function MainMapScreen() {
             renderItem={({ item }) => (
               <TouchableOpacity
                 onPress={() => {
-                  zoomToStation(item);
+                  zoomToStationOnRoute(item);
                   setFocusedRouteStation(item);
                 }}
               >
@@ -586,7 +755,7 @@ export default function MainMapScreen() {
         </View>
       )}
 
-      {/* FOCUSED ROUTE STATION DETAILS + SAVE */}
+      {/* ROUTE-ONLY DETAIL CARD */}
       {focusedRouteStation && stationMode === "route-only" && (
         <View style={styles.stationDetailCard}>
           <Text style={styles.detailTitle}>{focusedRouteStation.name}</Text>
@@ -599,6 +768,7 @@ export default function MainMapScreen() {
           </Text>
 
           <View style={{ flexDirection: "row", marginTop: 12 }}>
+            {/* NAVIGATE */}
             <TouchableOpacity
               style={styles.navigateBtn}
               onPress={() => {
@@ -609,6 +779,7 @@ export default function MainMapScreen() {
               <Text style={styles.navigateText}>Navigate</Text>
             </TouchableOpacity>
 
+            {/* SAVE */}
             <TouchableOpacity
               style={styles.saveBtn}
               onPress={() => handleSaveStation(focusedRouteStation)}
@@ -616,6 +787,7 @@ export default function MainMapScreen() {
               <Text style={styles.saveText}>Save</Text>
             </TouchableOpacity>
 
+            {/* CLOSE */}
             <TouchableOpacity
               style={styles.closeDetailBtn}
               onPress={() => setFocusedRouteStation(null)}
@@ -626,7 +798,7 @@ export default function MainMapScreen() {
         </View>
       )}
 
-      {/* NORMAL MODE SELECTED STATION + SAVE */}
+      {/* NORMAL MODE DETAIL CARD */}
       {selectedStation && stationMode === "normal" && (
         <View style={styles.normalStationCard}>
           <Text style={styles.detailTitle}>{selectedStation.name}</Text>
@@ -669,7 +841,10 @@ export default function MainMapScreen() {
         mode={searchMode}
         originCoords={
           location
-            ? { latitude: location.latitude, longitude: location.longitude }
+            ? {
+                latitude: location.latitude,
+                longitude: location.longitude,
+              }
             : null
         }
         onClose={() => setSearchModalVisible(false)}
@@ -681,15 +856,35 @@ export default function MainMapScreen() {
         visible={savedModalVisible}
         places={savedPlaces}
         onClose={() => setSavedModalVisible(false)}
+        onDelete={handleDeleteSavedPlace}
         onSelect={(place) => {
-          if (savedSelectionMode === "start") {
-            setStartLocation(place);
-            setStartLabel(place.name);
-          } else {
-            setDestinationLocation(place);
-            setDestinationLabel(place.name);
-          }
           setSavedModalVisible(false);
+
+          // Build a synthetic Station from SavedPlace so marker is guaranteed
+          const stationFromPlace: Station = {
+            id: place.id,
+            name: place.name,
+            address: place.address,
+            lat: place.lat,
+            lng: place.lng,
+            rating: 0,
+            userRatingsTotal: 0,
+            businessStatus: "OPERATIONAL",
+            distanceKm: 0,
+          };
+
+          // Ensure it's present in stations list so marker renders
+          setStations((prev) => {
+            const exists = prev.some((st) => st.id === stationFromPlace.id);
+            if (exists) return prev;
+            return [...prev, stationFromPlace];
+          });
+
+          // Zoom to saved place (no extra fetch due to skipFetchRef)
+          zoomToStation(stationFromPlace);
+
+          // Open details card
+          setSelectedStation(stationFromPlace);
         }}
       />
     </View>
@@ -784,7 +979,6 @@ const styles = StyleSheet.create({
   sheetCloseBtn: {
     marginTop: 10,
     paddingVertical: 10,
-    backgroundColor: "#eee",
     borderRadius: 10,
     alignItems: "center",
   },
