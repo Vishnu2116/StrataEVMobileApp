@@ -101,6 +101,7 @@ const styles = StyleSheet.create({
 
   closeBtn: {
     marginTop: 12,
+    marginBottom: 40, // ⭐ simple fix
     backgroundColor: "#eee",
     padding: 12,
     borderRadius: 12,
