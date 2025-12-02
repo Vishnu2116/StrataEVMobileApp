@@ -45,7 +45,8 @@
     },
 
     "plugins": [
-      "expo-build-properties",
+      "@react-native-firebase/app",
+      "@react-native-firebase/auth",
       [
         "expo-build-properties",
         {
@@ -58,7 +59,6 @@
         }
       ]
     ],
-
     "extra": {
       "firebase": {
         "apiKey": "AIzaSyD2shCob5jfqTOQunXE2R-9XwwMmiI3kBY",
