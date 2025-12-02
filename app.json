@@ -11,6 +11,7 @@
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
+
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.strataev.app",
@@ -22,6 +23,7 @@
         "NSLocationWhenInUseUsageDescription": "StrataEV requires your location to find nearby EV charging stations and show accurate routing."
       }
     },
+
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
@@ -37,10 +39,26 @@
       "package": "com.strataev.app",
       "edgeToEdgeEnabled": true
     },
+
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "plugins": ["@react-native-firebase/app", "@react-native-firebase/auth"],
+
+    "plugins": [
+      "expo-build-properties",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "googleServicesFile": "./google-services.json"
+          },
+          "ios": {
+            "googleServicesFile": "./GoogleService-Info.plist"
+          }
+        }
+      ]
+    ],
+
     "extra": {
       "firebase": {
         "apiKey": "AIzaSyD2shCob5jfqTOQunXE2R-9XwwMmiI3kBY",
@@ -56,6 +74,7 @@
       },
       "mapsApiKey": "AIzaSyCeV7lKIRrJtoCj4euu5bk-OTAZyUgmGo8"
     },
+
     "owner": "vishnu_kolli"
   }
 }
