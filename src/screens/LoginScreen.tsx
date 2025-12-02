@@ -6,11 +6,11 @@ import {
   TouchableOpacity,
   StyleSheet,
 } from "react-native";
-
 import auth from "@react-native-firebase/auth";
 
 export default function LoginScreen({ navigation }: any) {
   const [phone, setPhone] = useState("");
+  const [loading, setLoading] = useState(false);
 
   const handleContinue = async () => {
     if (phone.length < 10) {
@@ -18,21 +18,35 @@ export default function LoginScreen({ navigation }: any) {
       return;
     }
 
-    const fullPhone = "+91" + phone;
+    const fullPhone = "+91" + phone.trim();
 
     try {
+      setLoading(true);
       console.log("📩 Sending OTP to:", fullPhone);
 
-      // Native Firebase Phone Auth (no recaptcha needed)
+      // Native Firebase Phone Auth
       const confirmation = await auth().signInWithPhoneNumber(fullPhone);
+
+      // Safer: pass only verificationId to the OTP screen (serializable)
+      const verificationId = confirmation.verificationId;
+      console.log("✅ Got verificationId:", verificationId);
 
       navigation.navigate("OTP", {
         phone: fullPhone,
-        confirmation,
+        verificationId,
       });
     } catch (error: any) {
       console.log("❌ OTP Error:", error);
-      alert(error?.message || "Failed to send OTP. Try again.");
+
+      if (error?.code === "auth/too-many-requests") {
+        alert(
+          "Too many OTP attempts from this device. Please wait some time or use a different device / test number."
+        );
+      } else {
+        alert(error?.message || "Failed to send OTP. Try again.");
+      }
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -55,8 +69,14 @@ export default function LoginScreen({ navigation }: any) {
         />
       </View>
 
-      <TouchableOpacity style={styles.button} onPress={handleContinue}>
-        <Text style={styles.buttonText}>Continue</Text>
+      <TouchableOpacity
+        style={[styles.button, loading ? { opacity: 0.6 } : {}]}
+        onPress={handleContinue}
+        disabled={loading}
+      >
+        <Text style={styles.buttonText}>
+          {loading ? "Sending OTP..." : "Continue"}
+        </Text>
       </TouchableOpacity>
     </View>
   );

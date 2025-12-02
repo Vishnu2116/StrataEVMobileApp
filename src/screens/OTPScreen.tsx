@@ -9,7 +9,7 @@ import {
 import auth from "@react-native-firebase/auth";
 
 export default function OTPScreen({ route, navigation }: any) {
-  const { phone, confirmation } = route.params;
+  const { phone, verificationId } = route.params;
   const [code, setCode] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -21,11 +21,19 @@ export default function OTPScreen({ route, navigation }: any) {
 
     try {
       setLoading(true);
+      console.log("🔍 Verifying OTP for:", phone);
+      console.log("📌 Using verificationId:", verificationId);
 
-      const credential = await confirmation.confirm(code);
-      console.log("✅ OTP Verified! User:", credential.user?.uid);
+      // Build credential from verificationId + code
+      const credential = auth.PhoneAuthProvider.credential(
+        verificationId,
+        code
+      );
 
-      // Redirect to main app
+      const userCred = await auth().signInWithCredential(credential);
+      console.log("✅ OTP Verified! User:", userCred.user?.uid);
+
+      // Navigate to your main app (keep "Main" as your existing route name)
       navigation.reset({
         index: 0,
         routes: [{ name: "Main" }],
