@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "770978661002",
+    "project_id": "strataev-e9278",
+    "storage_bucket": "strataev-e9278.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:770978661002:android:3fbb6d4e20f30bca2fe373",
+        "android_client_info": {
+          "package_name": "com.strataev.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCyAsbVwFLADzoOdlXoTqqZy4Mbwc32AKs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

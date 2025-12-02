@@ -41,6 +41,10 @@ const SEARCH_RADIUS_METERS = 1500;
 const DEBOUNCE_MS = 800;
 const MIN_FETCH_INTERVAL_MS = 3000;
 
+// 🔌 Backend URL for route-based EV stations
+const ROUTE_STATIONS_URL =
+  "https://strataev-backend-mobile.onrender.com/api/ev/route-stations";
+
 // ------------------------------------
 type Station = {
   id: string;
@@ -68,7 +72,7 @@ function haversineDistanceKm(lat1, lon1, lat2, lon2) {
   const toRad = (v: number) => (v * Math.PI) / 180;
 
   const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lat2 - lon1);
+  const dLon = toRad(lon2 - lon1); // ✅ fixed bug (was lat2 - lon1)
 
   const a =
     Math.sin(dLat / 2) ** 2 +
@@ -115,7 +119,7 @@ function distancePointToSegment(p, a, b) {
 
 // ------------------------------------
 // CACHING HELPERS
-// Cache based on viewport bounds (Option 1)
+// Cache based on viewport bounds
 function makeRegionKey(region: {
   latitude: number;
   longitude: number;
@@ -148,13 +152,7 @@ const RoutePolyline = React.memo(function RoutePolyline({
   if (!coords || coords.length === 0) return null;
 
   return (
-    <Polyline
-      coordinates={coords}
-      strokeColor="#0A5CFF"
-      strokeWidth={6}
-      // optionally: lineCap="round"
-      // optionally: lineJoin="round"
-    />
+    <Polyline coordinates={coords} strokeColor="#0A5CFF" strokeWidth={6} />
   );
 });
 
@@ -173,7 +171,7 @@ export default function MainMapScreen() {
     useState<Location.LocationObjectCoords | null>(null);
   const [initialRegion, setInitialRegion] = useState<any>(null);
 
-  // EV stations
+  // EV stations (normal mode)
   const [stations, setStations] = useState<Station[]>([]);
   const [selectedStation, setSelectedStation] = useState<Station | null>(null);
 
@@ -188,8 +186,9 @@ export default function MainMapScreen() {
   const [focusedRouteStation, setFocusedRouteStation] =
     useState<Station | null>(null);
 
-  // Labels / Selection
+  // Loading / labels
   const [loading, setLoading] = useState(true);
+  const [routeStationsLoading, setRouteStationsLoading] = useState(false);
   const [startLabel, setStartLabel] = useState("Current Location");
   const [destinationLabel, setDestinationLabel] = useState("Enter destination");
 
@@ -285,7 +284,7 @@ export default function MainMapScreen() {
   };
 
   // ------------------------------------
-  // GRID SEARCH
+  // GRID SEARCH FOR NORMAL MODE
   function getGridPointsFromRegion(region) {
     const { latitude, longitude, latitudeDelta, longitudeDelta } = region;
 
@@ -314,7 +313,6 @@ export default function MainMapScreen() {
 
       // 1. Try cache first
       if (cache.has(cacheKey)) {
-        // console.log("📦 Using cached stations for region", cacheKey);
         setStations(cache.get(cacheKey) || []);
         return;
       }
@@ -418,7 +416,6 @@ export default function MainMapScreen() {
   const handleRegionChangeComplete = useCallback(
     (region) => {
       if (skipFetchRef.current) {
-        // console.log("⏭ Skipping fetch due to programmatic zoom");
         return;
       }
 
@@ -462,7 +459,6 @@ export default function MainMapScreen() {
     }
 
     const decoded = decodePolyline(result.polyline);
-    // Ensure decoded is in { latitude, longitude } format
     setRouteCoords(decoded);
     setRouteDistance(result.distanceText);
     setRouteDuration(result.durationText);
@@ -502,22 +498,91 @@ export default function MainMapScreen() {
   };
 
   // ------------------------------------
-  // FIND STATIONS ALONG ROUTE
-  const findStationsAlongRoute = () => {
-    const MAX_DIST = 300;
+  // BACKEND: FETCH STATIONS ALONG ROUTE
+  const findStationsAlongRoute = async () => {
+    if (!routeCoords || routeCoords.length === 0) {
+      alert("Please select a route first");
+      return;
+    }
 
-    const results = stations.filter((s) => {
-      for (let i = 0; i < routeCoords.length - 1; i++) {
-        const d = distancePointToSegment(s, routeCoords[i], routeCoords[i + 1]);
-        if (d <= MAX_DIST) return true;
+    try {
+      setRouteStationsLoading(true);
+      setShowRouteStationsCard(true);
+      setStationMode("route-only");
+      setFocusedRouteStation(null);
+
+      // Send simplified path to backend
+      const path = routeCoords
+        .map((p) => {
+          const lat = p.latitude ?? p.lat ?? null;
+          const lng = p.longitude ?? p.lng ?? null;
+
+          if (lat == null || lng == null) return null;
+
+          return { lat, lng };
+        })
+        .filter(Boolean);
+
+      const response = await fetch(ROUTE_STATIONS_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ path }),
+      });
+
+      if (!response.ok) {
+        console.log("❌ Route stations backend error:", response.status);
+        alert("Failed to fetch stations along route");
+        setRouteStationsLoading(false);
+        return;
       }
-      return false;
-    });
 
-    setStationsAlongRoute(results);
-    setFocusedRouteStation(null);
-    setStationMode("route-only");
-    setShowRouteStationsCard(true);
+      const data = await response.json();
+
+      const backendStationsRaw: any[] = data.stations || data.results || [];
+
+      // Normalize into Station[]
+      const backendStations: Station[] = backendStationsRaw
+        .map((raw) => {
+          const lat =
+            raw.lat ??
+            raw.latitude ??
+            raw.location?.lat ??
+            raw.geometry?.location?.lat ??
+            null;
+          const lng =
+            raw.lng ??
+            raw.longitude ??
+            raw.location?.lng ??
+            raw.geometry?.location?.lng ??
+            null;
+
+          if (lat == null || lng == null) return null;
+
+          return {
+            id: raw.id || raw.place_id || `${lat.toFixed(6)},${lng.toFixed(6)}`,
+            name: raw.name || "EV Charging Station",
+            lat,
+            lng,
+            address: raw.address || raw.formatted_address || raw.vicinity || "",
+            rating: typeof raw.rating === "number" ? raw.rating : 0,
+            userRatingsTotal:
+              raw.userRatingsTotal || raw.user_ratings_total || 0,
+            businessStatus:
+              raw.businessStatus || raw.business_status || "OPERATIONAL",
+            distanceKm: 0,
+          } as Station;
+        })
+        .filter(Boolean) as Station[];
+
+      setStationsAlongRoute(backendStations);
+    } catch (err) {
+      console.log("❌ findStationsAlongRoute error:", err);
+      alert("Failed to fetch stations along route");
+    } finally {
+      setRouteStationsLoading(false);
+    }
   };
 
   // ------------------------------------
@@ -632,7 +697,9 @@ export default function MainMapScreen() {
                 key={st.id}
                 coordinate={{ latitude: st.lat, longitude: st.lng }}
                 onPress={() => {
-                  setSelectedStation(st);
+                  setTimeout(() => {
+                    setSelectedStation(st);
+                  }, 0);
                 }}
               >
                 <Image
@@ -647,13 +714,17 @@ export default function MainMapScreen() {
             );
           })}
 
-        {/* Route-only markers (keep marker even when focused) */}
+        {/* Route-only markers (backend stations along route) */}
         {stationMode === "route-only" &&
           stationsAlongRoute.map((st) => (
             <Marker
               key={st.id}
               coordinate={{ latitude: st.lat, longitude: st.lng }}
-              onPress={() => setFocusedRouteStation(st)}
+              onPress={() => {
+                setTimeout(() => {
+                  setFocusedRouteStation(st);
+                }, 0);
+              }}
             >
               <Image
                 source={require("../../assets/icons/ev.png")}
@@ -700,9 +771,10 @@ export default function MainMapScreen() {
               <TouchableOpacity
                 style={styles.routeBtnPrimary}
                 onPress={findStationsAlongRoute}
+                disabled={routeStationsLoading}
               >
                 <Text style={styles.routeBtnPrimaryText}>
-                  Stations On Route
+                  {routeStationsLoading ? "Loading…" : "Stations On Route"}
                 </Text>
               </TouchableOpacity>
 
@@ -722,26 +794,35 @@ export default function MainMapScreen() {
         <View style={styles.fullSheet}>
           <Text style={styles.sheetTitle}>Stations Along Route</Text>
 
-          <FlatList
-            data={stationsAlongRoute}
-            keyExtractor={(item) => item.id}
-            renderItem={({ item }) => (
-              <TouchableOpacity
-                onPress={() => {
-                  zoomToStationOnRoute(item);
-                  setFocusedRouteStation(item);
-                }}
-              >
-                <View style={styles.stationItem}>
-                  <Text style={styles.itemTitle}>{item.name}</Text>
-                  <Text style={styles.itemAddress}>{item.address}</Text>
-                  <Text style={styles.itemRating}>
-                    ⭐ {item.rating} ({item.userRatingsTotal})
-                  </Text>
-                </View>
-              </TouchableOpacity>
-            )}
-          />
+          {routeStationsLoading ? (
+            <View style={{ paddingVertical: 16, alignItems: "center" }}>
+              <ActivityIndicator />
+              <Text style={{ marginTop: 8, color: "#555" }}>
+                Fetching stations…
+              </Text>
+            </View>
+          ) : (
+            <FlatList
+              data={stationsAlongRoute}
+              keyExtractor={(item) => item.id}
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  onPress={() => {
+                    zoomToStationOnRoute(item);
+                    setFocusedRouteStation(item);
+                  }}
+                >
+                  <View style={styles.stationItem}>
+                    <Text style={styles.itemTitle}>{item.name}</Text>
+                    <Text style={styles.itemAddress}>{item.address}</Text>
+                    <Text style={styles.itemRating}>
+                      ⭐ {item.rating} ({item.userRatingsTotal})
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              )}
+            />
+          )}
 
           <TouchableOpacity
             style={styles.sheetCloseBtn}

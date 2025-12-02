@@ -1,21 +1,20 @@
 {
   "expo": {
-    "name": "StrataEv",
-    "slug": "StrataEv",
+    "name": "StrataEvMobile",
+    "slug": "vishnukolli",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
-
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.strataev.app",
+      "googleServicesFile": "./GoogleService-Info.plist",
       "config": {
         "googleMapsApiKey": "AIzaSyCeV7lKIRrJtoCj4euu5bk-OTAZyUgmGo8"
       },
@@ -23,12 +22,12 @@
         "NSLocationWhenInUseUsageDescription": "StrataEV requires your location to find nearby EV charging stations and show accurate routing."
       }
     },
-
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
+      "googleServicesFile": "./google-services.json",
       "permissions": ["ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION"],
       "config": {
         "googleMaps": {
@@ -38,13 +37,10 @@
       "package": "com.strataev.app",
       "edgeToEdgeEnabled": true
     },
-
     "web": {
       "favicon": "./assets/favicon.png"
     },
-
-    "plugins": [],
-
+    "plugins": ["@react-native-firebase/app", "@react-native-firebase/auth"],
     "extra": {
       "firebase": {
         "apiKey": "AIzaSyD2shCob5jfqTOQunXE2R-9XwwMmiI3kBY",
@@ -55,7 +51,11 @@
         "appId": "1:770978661002:web:43092d5c05b031942fe373",
         "measurementId": "G-X2SWE56STN"
       },
+      "eas": {
+        "projectId": "71183725-48a0-4769-8436-cfee1dbceb1b"
+      },
       "mapsApiKey": "AIzaSyCeV7lKIRrJtoCj4euu5bk-OTAZyUgmGo8"
-    }
+    },
+    "owner": "vishnu_kolli"
   }
 }
