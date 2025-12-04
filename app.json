@@ -4,8 +4,11 @@
     "slug": "vishnukolli",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+
+    "icon": "./assets/fin_icon.png",
+
     "userInterfaceStyle": "light",
+
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
@@ -20,13 +23,14 @@
         "googleMapsApiKey": "AIzaSyCeV7lKIRrJtoCj4euu5bk-OTAZyUgmGo8"
       },
       "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "StrataEV requires your location to find nearby EV charging stations and show accurate routing."
+        "NSLocationWhenInUseUsageDescription": "BharathEv requires your location to find nearby EV charging stations and show accurate routing."
       }
     },
 
     "android": {
+      "versionCode": 1,
       "adaptiveIcon": {
-        "foregroundImage": "./assets/icon_app_1024.png",
+        "foregroundImage": "./assets/fin_icon.png",
         "backgroundColor": "#ffffff"
       },
       "googleServicesFile": "./google-services.json",
@@ -59,6 +63,7 @@
         }
       ]
     ],
+
     "extra": {
       "firebase": {
         "apiKey": "AIzaSyD2shCob5jfqTOQunXE2R-9XwwMmiI3kBY",

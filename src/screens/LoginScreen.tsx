@@ -52,7 +52,7 @@ export default function LoginScreen({ navigation }: any) {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Welcome to Strata EV</Text>
+      <Text style={styles.title}>Welcome to Bharath EV</Text>
       <Text style={styles.subtitle}>Enter your mobile number to continue</Text>
 
       <View style={styles.phoneContainer}>
